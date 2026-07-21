@@ -142,6 +142,7 @@ a{color:inherit;}
 .prod-tile .pname{font-weight:700; font-size:14px; display:block;}
 .prod-tile .pcat{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.03em;}
 .prod-tile .pprice{font-family:'IBM Plex Mono',monospace; color:var(--brick); font-weight:600; margin-top:6px; display:block;}
+.prod-tile .pdesc{font-size:11.5px; color:var(--ink-soft); margin-top:4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
 .cart-item{display:flex; align-items:flex-start; gap:8px; padding:10px 0; border-bottom:1px dashed var(--line);}
 .cart-item:last-child{border-bottom:none;}
 .cart-item .ci-main{flex:1; min-width:0;}
@@ -259,7 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App (Alojado en GitHub)
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyiiuaeOiXTxz_Os_MGAypE9rST24XLg-Vvc2os_mbE0vok9jlXxVU1gZj2nR1vCMCL/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFbOi20LGfHiEOgWBPRXorZNnkVeTHucKVPTBDqCJijASGkjijPeE3AotFv-tpwgMc/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -281,18 +282,18 @@ function seedDB(){
     counters:{order:1, user:2, product:1},
     users:[{id:1, username:'Brian', password:'1234', name:'Brian', role:'admin'}],
     products:[
-      {id:1, name:'Taco de birria', price:22, category:'Birria'},
-      {id:2, name:'Orden de birria (3 tacos)', price:60, category:'Birria'},
-      {id:3, name:'Quesabirria', price:28, category:'Birria'},
-      {id:4, name:'Consomé chico', price:25, category:'Birria'},
-      {id:5, name:'Consomé grande', price:45, category:'Birria'},
-      {id:6, name:'Torta de birria', price:65, category:'Birria'},
-      {id:7, name:'Gringa de birria', price:38, category:'Birria'},
-      {id:8, name:'Refresco', price:20, category:'Bebidas'},
-      {id:9, name:'Agua fresca', price:18, category:'Bebidas'},
-      {id:10, name:'Cerveza', price:35, category:'Bebidas'},
-      {id:11, name:'Extra tortillas', price:10, category:'Extras'},
-      {id:12, name:'Extra cebolla/cilantro', price:5, category:'Extras'}
+      {id:1, name:'Taco de birria', price:22, category:'Birria', description:'Taco tradicional con tortilla de maíz y carne suave'},
+      {id:2, name:'Orden de birria (3 tacos)', price:60, category:'Birria', description:'Incluye 3 deliciosos tacos, consomé y complementos'},
+      {id:3, name:'Quesabirria', price:28, category:'Birria', description:'Tortilla dorada con queso fundido y birria'},
+      {id:4, name:'Consomé chico', price:25, category:'Birria', description:'Caldo de birria en presentación chica'},
+      {id:5, name:'Consomé grande', price:45, category:'Birria', description:'Caldo de birria en presentación grande con carne'},
+      {id:6, name:'Torta de birria', price:65, category:'Birria', description:'Bolillo crujiente bañado y relleno de birria con queso'},
+      {id:7, name:'Gringa de birria', price:38, category:'Birria', description:'Dos tortillas grandes con queso y carne al pastor/birria'},
+      {id:8, name:'Refresco', price:20, category:'Bebidas', description:'Lata de 355ml fría'},
+      {id:9, name:'Agua fresca', price:18, category:'Bebidas', description:'Agua del día de 500ml'},
+      {id:10, name:'Cerveza', price:35, category:'Bebidas', description:'Cerveza nacional fría'},
+      {id:11, name:'Extra tortillas', price:10, category:'Extras', description:'Orden adicional de tortillas'},
+      {id:12, name:'Extra cebolla/cilantro', price:5, category:'Extras', description:'Porción extra de verdura'}
     ],
     orders:[], history:[], closures:[],
     cash:{date:null, initial:null, openedBy:null}
@@ -312,19 +313,15 @@ async function loadDB(){
   }
 }
 
-async function saveDB(db){
+// Guardado optimizado y en segundo plano (background sync) para máxima velocidad de respuesta
+function saveDB(db){
   dbCache = db;
-  try{
-    await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'saveDB', db })
-    });
-  }catch(e){
-    console.error(e);
-    toast("Error guardando en Google Sheets");
-  }
+  fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'saveDB', db })
+  }).catch(e => console.error("Error sincronizando en segundo plano:", e));
 }
 
 function nextId(db, key){ const n = db.counters[key]||1; db.counters[key]=n+1; return n; }
@@ -338,7 +335,7 @@ async function logHistory(action, detail){
   const s = getSession();
   db.history.unshift({id:uid(), ts:new Date().toISOString(), user:s?s.name:'—', role:s?s.role:'—', action, detail});
   if(db.history.length>500) db.history.length = 500;
-  await saveDB(db);
+  saveDB(db);
 }
 
 function toast(msg){
@@ -410,7 +407,7 @@ function renderLogin(){
       return;
     }
     setSession({id:user.id, name:user.name, username:user.username, role:user.role});
-    await logHistory('Inicio de sesión', user.name+' ('+ROLE_LABEL[user.role]+') inició sesión');
+    logHistory('Inicio de sesión', user.name+' ('+ROLE_LABEL[user.role]+') inició sesión');
     boot();
   });
 }
@@ -461,7 +458,7 @@ async function renderShell(){
 }
 
 function goView(v){ state.view = v; state.cart=[]; state.customer=''; state.generalNotes=''; renderShell(); }
-async function doLogout(){ await logHistory('Cierre de sesión', (getSession()||{}).name+' cerró sesión'); clearSession(); renderLogin(); }
+async function doLogout(){ logHistory('Cierre de sesión', (getSession()||{}).name+' cerró sesión'); clearSession(); renderLogin(); }
 async function manualRefresh(){
   dbCache = null;
   await loadDB();
@@ -494,10 +491,11 @@ async function viewPedidos(){
   const chips = cats.map(c=>`<button class="chip ${state.prodFilter===c?'active':''}" onclick="setProdFilter('${c}')">${c}</button>`).join('');
   const prods = db.products.filter(p=> state.prodFilter==='Todos' || p.category===state.prodFilter);
   const tiles = prods.map(p=>`
-    <button class="prod-tile" onclick="addToCart(${p.id})">
+    <button class="prod-tile" onclick="addToCart(${p.id})" title="${p.description || ''}">
       <span class="pname">${p.name}</span>
       <span class="pcat">${p.category}</span>
       <span class="pprice">${money(p.price)}</span>
+      ${p.description ? `<span class="pdesc">${p.description}</span>` : ''}
     </button>`).join('') || `<div class="empty-state" style="grid-column:1/-1">Sin productos en esta categoría.</div>`;
 
   return `
@@ -588,8 +586,8 @@ async function submitOrder(){
     paidAt:null, paidBy:null
   };
   db.orders.unshift(order);
-  await saveDB(db);
-  await logHistory('Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
+  saveDB(db);
+  logHistory('Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
   state.cart=[]; state.customer=''; state.generalNotes='';
   toast('Pedido '+order.folio+' enviado');
   renderView();
@@ -653,8 +651,8 @@ async function setOrderStatus(id, status){
   const o = db.orders.find(x=>x.id===id);
   if(!o) return;
   o.status = status;
-  await saveDB(db);
-  await logHistory('Estatus cocina', `${o.folio} → ${KITCHEN_LABEL[status]}`);
+  saveDB(db);
+  logHistory('Estatus cocina', `${o.folio} → ${KITCHEN_LABEL[status]}`);
   renderView();
 }
 
@@ -770,8 +768,8 @@ async function confirmPayment(){
   o.payments = d.splits.map(s=>({method:s.method, amount:Number(s.amount)||0}));
   o.paidAt = new Date().toISOString();
   o.paidBy = getSession().name;
-  await saveDB(db);
-  await logHistory('Cobro realizado', `${o.folio} · ${money(o.total)}`);
+  saveDB(db);
+  logHistory('Cobro realizado', `${o.folio} · ${money(o.total)}`);
   toast('Pago registrado');
   closePayModal();
   renderView();
@@ -835,7 +833,7 @@ async function viewProductos(){
   const db = await loadDB();
   const rows = db.products.map(p=>`
     <tr>
-      <td>${p.name}</td>
+      <td><b>${p.name}</b><br><span class="muted" style="font-size:12px;">${p.description || 'Sin descripción'}</span></td>
       <td>${p.category}</td>
       <td class="mono">${money(p.price)}</td>
       <td style="text-align:right;">
@@ -845,11 +843,11 @@ async function viewProductos(){
     </tr>`).join('') || `<tr><td colspan="4" class="empty-state">Sin productos.</td></tr>`;
   return `
   <div class="view-head">
-    <div><h2>Productos</h2><p>Menú del restaurante.</p></div>
+    <div><h2>Productos</h2><p>Menú del restaurante y descripciones.</p></div>
     <button class="btn btn-primary" onclick="openProductModal()">+ Nuevo producto</button>
   </div>
   <div class="card table-wrap">
-    <table><thead><tr><th>Nombre</th><th>Categoría</th><th>Precio</th><th></th></tr></thead>
+    <table><thead><tr><th>Nombre y Descripción</th><th>Categoría</th><th>Precio</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>
   <div id="modalHost"></div>`;
@@ -857,7 +855,7 @@ async function viewProductos(){
 
 async function openProductModal(pid){
   const db = await loadDB();
-  const p = pid ? db.products.find(x=>x.id===pid) : {name:'', price:'', category:''};
+  const p = pid ? db.products.find(x=>x.id===pid) : {name:'', price:'', category:'', description:''};
   document.getElementById('modalHost').innerHTML = `
   <div class="modal-overlay" onclick="if(event.target===this) closeModalHost()">
     <div class="modal">
@@ -866,6 +864,7 @@ async function openProductModal(pid){
       <div class="field"><label>Nombre</label><input id="pfName" value="${p.name}"></div>
       <div class="field"><label>Categoría</label><input id="pfCat" value="${p.category}" placeholder="Ej. Birria, Bebidas"></div>
       <div class="field"><label>Precio</label><input id="pfPrice" type="number" min="0" step="0.5" value="${p.price}"></div>
+      <div class="field"><label>Descripción</label><textarea id="pfDesc" rows="2" placeholder="Detalle o ingredientes del producto">${p.description || ''}</textarea></div>
       <button class="btn btn-primary btn-block" onclick="saveProduct(${pid||'null'})">Guardar</button>
     </div>
   </div>`;
@@ -875,18 +874,19 @@ async function saveProduct(pid){
   const name = document.getElementById('pfName').value.trim();
   const cat = document.getElementById('pfCat').value.trim() || 'Otros';
   const price = parseFloat(document.getElementById('pfPrice').value)||0;
+  const description = document.getElementById('pfDesc').value.trim();
   if(!name){ toast('Escribe un nombre'); return; }
   const db = await loadDB();
   if(pid){
     const p = db.products.find(x=>x.id===pid);
-    Object.assign(p, {name, category:cat, price});
-    await logHistory('Producto editado', name);
+    Object.assign(p, {name, category:cat, price, description});
+    logHistory('Producto editado', name);
   }else{
     const id = nextId(db,'product');
-    db.products.push({id, name, category:cat, price});
-    await logHistory('Producto creado', name);
+    db.products.push({id, name, category:cat, price, description});
+    logHistory('Producto creado', name);
   }
-  await saveDB(db);
+  saveDB(db);
   closeModalHost();
   toast('Guardado');
   renderView();
@@ -897,8 +897,8 @@ async function deleteProduct(pid){
   const p = db.products.find(x=>x.id===pid);
   if(!confirm('¿Eliminar "'+(p?p.name:'')+'"?')) return;
   db.products = db.products.filter(x=>x.id!==pid);
-  await saveDB(db);
-  await logHistory('Producto eliminado', p?p.name:'');
+  saveDB(db);
+  logHistory('Producto eliminado', p?p.name:'');
   toast('Eliminado');
   renderView();
 }
@@ -930,7 +930,7 @@ async function viewCorte(){
 
   return `
   <div class="view-head">
-    <div><h2>Corte de caja</h2><p>Control de caja y ventas en la nube.</p></div>
+    <div><h2>Corte de caja y reinicios</h2><p>Control de caja, ventas y opciones de reinicio.</p></div>
     <button class="btn" onclick="printReport()">📄 Reporte histórico</button>
   </div>
 
@@ -943,7 +943,7 @@ async function viewCorte(){
         <div class="stat-card"><div class="slabel">Ventas en efectivo</div><div class="sval">${money(dayS.byMethod.efectivo)}</div></div>
         <div class="stat-card"><div class="slabel">Caja final estimada</div><div class="sval">${money(finalCash)}</div></div>
       </div>
-      <button class="btn btn-primary" style="margin-top:10px;" onclick="realizarCorte()">Realizar corte de caja</button>
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="realizarCorte()">Realizar corte de caja (Reiniciar día)</button>
     ` : `
       <p class="muted">La caja de hoy no se ha abierto.</p>
       <div class="field" style="max-width:260px;"><label>Monto inicial</label><input id="initCash" type="number" min="0" step="0.5" value="0"></div>
@@ -952,9 +952,20 @@ async function viewCorte(){
   </div>
 
   <div class="stat-grid">
-    <div class="stat-card"><div class="slabel">Venta de hoy</div><div class="sval">${money(dayS.total)}</div></div>
-    <div class="stat-card"><div class="slabel">Venta de la semana</div><div class="sval">${money(weekS.total)}</div></div>
-    <div class="stat-card"><div class="slabel">Venta del mes</div><div class="sval">${money(monthS.total)}</div></div>
+    <div class="stat-card">
+      <div class="slabel">Venta de hoy</div>
+      <div class="sval">${money(dayS.total)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="slabel">Venta de la semana</div>
+      <div class="sval">${money(weekS.total)}</div>
+      <button class="btn btn-sm btn-danger" style="margin-top:10px;" onclick="reiniciarVentasSemana()">Reiniciar semana</button>
+    </div>
+    <div class="stat-card">
+      <div class="slabel">Venta del mes</div>
+      <div class="sval">${money(monthS.total)}</div>
+      <button class="btn btn-sm btn-danger" style="margin-top:10px;" onclick="reiniciarVentasMes()">Reiniciar mes</button>
+    </div>
   </div>
 
   <div class="card">
@@ -970,8 +981,8 @@ async function abrirCaja(){
   const val = parseFloat(document.getElementById('initCash').value)||0;
   const db = await loadDB();
   db.cash = {date:todayKey(), initial:val, openedBy:getSession().name};
-  await saveDB(db);
-  await logHistory('Apertura de caja', 'Inicial: '+money(val));
+  saveDB(db);
+  logHistory('Apertura de caja', 'Inicial: '+money(val));
   toast('Caja abierta');
   renderView();
 }
@@ -981,16 +992,38 @@ async function realizarCorte(){
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   const finalCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
-  if(!confirm('¿Realizar el corte del día?')) return;
+  if(!confirm('¿Realizar el corte del día? Esto registrará el cierre de caja.')) return;
   db.closures.push({
     id:uid(), date:tk, initialCash:db.cash.initial, finalCash,
     totalSales:dayS.total, byMethod:dayS.byMethod, ordersCount:dayS.count,
     closedBy:getSession().name, ts:new Date().toISOString()
   });
   db.cash = {date:null, initial:null, openedBy:null};
-  await saveDB(db);
-  await logHistory('Corte realizado', `Venta: ${money(dayS.total)}`);
-  toast('Corte realizado');
+  saveDB(db);
+  logHistory('Corte realizado', `Venta: ${money(dayS.total)}`);
+  toast('Corte realizado con éxito');
+  renderView();
+}
+
+async function reiniciarVentasSemana(){
+  if(!confirm('¿Estás seguro de reiniciar/borrar las ventas de la semana actual? Esta acción no se puede deshacer.')) return;
+  const db = await loadDB();
+  const wk = isoWeekKey();
+  db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || isoWeekKey(new Date(o.paidAt)) !== wk);
+  saveDB(db);
+  logHistory('Reinicio de semana', 'Se reiniciaron las ventas de la semana actual');
+  toast('Ventas de la semana reiniciadas');
+  renderView();
+}
+
+async function reiniciarVentasMes(){
+  if(!confirm('¿Estás seguro de reiniciar/borrar las ventas del mes actual? Esta acción no se puede deshacer.')) return;
+  const db = await loadDB();
+  const mk = monthKey();
+  db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || monthKey(new Date(o.paidAt)) !== mk);
+  saveDB(db);
+  logHistory('Reinicio de mes', 'Se reiniciaron las ventas del mes actual');
+  toast('Ventas del mes reiniciadas');
   renderView();
 }
 
@@ -1074,13 +1107,13 @@ async function saveUser(uidNum){
   if(uidNum){
     const u = db.users.find(x=>x.id===uidNum);
     Object.assign(u, {name, username, password, role});
-    await logHistory('Usuario editado', name);
+    logHistory('Usuario editado', name);
   }else{
     const id = nextId(db,'user');
     db.users.push({id, name, username, password, role});
-    await logHistory('Usuario creado', name);
+    logHistory('Usuario creado', name);
   }
-  await saveDB(db);
+  saveDB(db);
   closeModalHost();
   toast('Guardado');
   renderView();
@@ -1091,8 +1124,8 @@ async function deleteUser(uidNum){
   const u = db.users.find(x=>x.id===uidNum);
   if(!confirm('¿Eliminar a '+(u?u.name:'')+'?')) return;
   db.users = db.users.filter(x=>x.id!==uidNum);
-  await saveDB(db);
-  await logHistory('Usuario eliminado', u?u.name:'');
+  saveDB(db);
+  logHistory('Usuario eliminado', u?u.name:'');
   toast('Eliminado');
   renderView();
 }
@@ -1104,7 +1137,6 @@ async function boot(){
   const s = getSession();
   if(!s){ renderLogin(); return; }
   
-  // Mostrar pantalla de carga inicial mientras descarga la DB de la nube
   document.getElementById('root').innerHTML = `<div class="loading-overlay"><div style="font-size:36px;">🌶️</div>Conectando a Google Sheets...</div>`;
   await loadDB();
   renderShell();
