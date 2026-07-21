@@ -261,7 +261,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App (Alojado en GitHub)
    ========================================================================= */
 
-const SCRIPT_URL = "TU_URL_DE_APPS_SCRIPT_AQUI"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "Thttps://script.google.com/macros/s/AKfycbziJE-i4KcRBPE7h6Ki0X7UTClnsv5xmZQzm1IkfjG-6XBk_f7Ce99Lh9UKRF_Tjn4U/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -942,9 +942,22 @@ async function viewCorte(){
   const cashOpen = db.cash.date===tk;
   const finalCash = (cashOpen? (Number(db.cash.initial)||0) : 0) + dayS.byMethod.efectivo;
 
-  const closuresRows = [...db.closures].reverse().slice(0,10).map(c=>`
-    <tr><td>${c.date}</td><td class="mono">${money(c.initialCash)}</td><td class="mono">${money(c.finalCash)}</td><td class="mono">${money(c.totalSales)}</td><td>${c.closedBy}</td></tr>
-  `).join('') || `<tr><td colspan="5" class="empty-state">Sin cortes registrados.</td></tr>`;
+  const closuresRows = [...db.closures].reverse().slice(0,10).map(c=> {
+    const diff = c.difference !== undefined ? c.difference : 0;
+    const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
+    const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
+    return `
+      <tr>
+        <td>${c.date}</td>
+        <td class="mono">${money(c.initialCash)}</td>
+        <td class="mono">Esp: ${money(c.finalCash)}<br>Real: ${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td>
+        <td class="mono" style="color:${diff >= 0 ? 'var(--cilantro)' : 'var(--danger)'};">${diff >= 0 ? '+' : ''}${money(diff)}</td>
+        <td class="mono">Tarj: ${money(tarjeta)}<br>Transf: ${money(transferencia)}</td>
+        <td class="mono">${money(c.totalSales)}</td>
+        <td>${c.closedBy}</td>
+      </tr>
+    `;
+  }).join('') || `<tr><td colspan="7" class="empty-state">Sin cortes registrados.</td></tr>`;
 
   return `
   <div class="view-head">
@@ -989,7 +1002,7 @@ async function viewCorte(){
   <div class="card">
     <div class="section-title">Historial de cortes</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Fecha</th><th>Caja inicial</th><th>Caja final</th><th>Total</th><th>Cerró</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Otros Pagos</th><th>Total</th><th>Cerró</th></tr></thead>
       <tbody>${closuresRows}</tbody>
     </table></div>
   </div>`;
@@ -1009,17 +1022,25 @@ async function realizarCorte(){
   const db = await loadDB();
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
-  const finalCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
+  const expectedCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
+  
+  const inputReal = prompt('Caja inicial: ' + money(db.cash.initial) + '\nVentas en efectivo: ' + money(dayS.byMethod.efectivo) + '\nEfectivo esperado en caja: ' + money(expectedCash) + '\n\nIngrese la cantidad REAL de efectivo que hay al finalizar en la caja:', expectedCash);
+  if(inputReal === null) return;
+  const realFinalCash = parseFloat(inputReal);
+  if(isNaN(realFinalCash)){ toast('Monto de efectivo inválido'); return; }
+  const difference = +(realFinalCash - expectedCash).toFixed(2);
+
   if(!confirm('¿Realizar el corte del día? Esto registrará el cierre de caja y reiniciará el día.')) return;
   db.closures.push({
-    id:uid(), date:tk, initialCash:db.cash.initial, finalCash,
+    id:uid(), date:tk, initialCash:db.cash.initial, finalCash: expectedCash,
+    realFinalCash, difference,
     totalSales:dayS.total, byMethod:dayS.byMethod, ordersCount:dayS.count,
     closedBy:getSession().name, ts:new Date().toISOString()
   });
   db.cash = {date:null, initial:null, openedBy:null};
   db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || todayKey(new Date(o.paidAt)) !== tk);
   saveDB(db);
-  logHistory('Corte realizado', `Venta: ${money(dayS.total)}`);
+  logHistory('Corte realizado', `Venta: ${money(dayS.total)} | Diferencia: ${money(difference)}`);
   toast('Corte realizado con éxito');
   renderView();
 }
@@ -1048,11 +1069,15 @@ async function reiniciarVentasMes(){
 
 async function printReport(){
   const db = await loadDB();
-  const rows = [...db.closures].reverse().map(c=>`
-    <tr><td>${c.date}</td><td>${money(c.initialCash)}</td><td>${money(c.finalCash)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`).join('') || '<tr><td colspan="6">Sin cortes</td></tr>';
+  const rows = [...db.closures].reverse().map(c=>{
+    const diff = c.difference !== undefined ? c.difference : 0;
+    const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
+    const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
+    return `<tr><td>${c.date}</td><td>${money(c.initialCash)}</td><td>${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td><td style="color:${diff>=0?'green':'red'}">${diff>=0?'+':''}${money(diff)}</td><td>Tarjeta: ${money(tarjeta)}<br>Transf: ${money(transferencia)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`;
+  }).join('') || '<tr><td colspan="8">Sin cortes</td></tr>';
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Reporte</title><style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} td,th{border:1px solid #ccc;padding:6px;}</style></head>
-  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
+  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Otros Pagos</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
   <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
