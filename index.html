@@ -261,7 +261,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App (Alojado en GitHub)
    ========================================================================= */
 
-const SCRIPT_URL = "Thttps://script.google.com/macros/s/AKfycbziJE-i4KcRBPE7h6Ki0X7UTClnsv5xmZQzm1IkfjG-6XBk_f7Ce99Lh9UKRF_Tjn4U/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx5GB7sZlivnVM52D693kT5oXKKTMPmGheMZZ1K3RBWbegIHkJ1kffm4yk7XMJn2JON/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -314,15 +314,11 @@ async function loadDB(){
   }
 }
 
-// Guardado optimizado y en segundo plano (background sync) para máxima velocidad de respuesta
-// Guardado optimizado corregido para evitar el bloqueo de CORS / no-cors
+// Sincronización robusta por parámetros para evitar bloqueo de CORS y redirecciones 302
 function saveDB(db){
   dbCache = db;
-  fetch(SCRIPT_URL, {
-    method: 'POST',
-    mode: 'no-cors',
-    body: JSON.stringify({ action: 'saveDB', db })
-  }).catch(e => console.error("Error sincronizando en segundo plano:", e));
+  fetch(SCRIPT_URL + "?action=saveDB&db=" + encodeURIComponent(JSON.stringify(db)))
+    .catch(e => console.error("Error sincronizando en segundo plano:", e));
 }
 
 function nextId(db, key){ const n = db.counters[key]||1; db.counters[key]=n+1; return n; }
@@ -501,7 +497,6 @@ async function viewPedidos(){
       ${p.description ? `<span class="pdesc">${p.description}</span>` : ''}
     </button>`).join('') || `<div class="empty-state" style="grid-column:1/-1">Sin productos en esta categoría.</div>`;
 
-  // Alerta y sección para meseros con pedidos listos en barra
   const myBarraOrders = db.orders.filter(o => o.waiterId === s.id && o.status === 'barra');
   const barraAlertHTML = myBarraOrders.length ? `
     <div class="card" style="margin-bottom:18px; border-color:var(--cilantro); background:#e2f0da22;">
