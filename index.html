@@ -124,6 +124,7 @@ a{color:inherit;}
 .badge-proceso{background:#fbeecb; color:#8a6408;}
 .badge-listo{background:#e2f0da; color:#3a6b2b;}
 .badge-barra{background:#dcebf5; color:#1f5a80;}
+.badge-entregado{background:#e2f0da; color:#2d5422;}
 .badge-pagado{background:#e2f0da; color:#3a6b2b;}
 .badge-pendiente{background:#fbe0de; color:#a4241b;}
 .badge-admin{background:#f0dcf7;color:#7a2b91;}
@@ -171,7 +172,7 @@ a{color:inherit;}
 .ticket-body li b{font-family:'IBM Plex Mono',monospace;}
 .ticket-note{margin-top:8px; background:var(--bg-alt); border-radius:8px; padding:8px 10px; font-size:12.5px; color:var(--ink-soft);}
 .status-rail{display:flex; align-items:center; gap:0; padding:14px 16px 4px;}
-.status-rail .dot{width:11px; height:11px; border-radius:50%; background:var(--line); flex-shrink:0;}
+.status-rail .dot{width:9px; height:9px; border-radius:50%; background:var(--line); flex-shrink:0;}
 .status-rail .seg{flex:1; height:3px; background:var(--line);}
 .status-rail .dot.done, .status-rail .seg.done{background:var(--cilantro);}
 .ticket-foot{display:flex; gap:8px; padding:10px 16px 16px;}
@@ -260,7 +261,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App (Alojado en GitHub)
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxFbOi20LGfHiEOgWBPRXorZNnkVeTHucKVPTBDqCJijASGkjijPeE3AotFv-tpwgMc/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "TU_URL_DE_APPS_SCRIPT_AQUI"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -368,7 +369,8 @@ let state = {
   prodFilter:'Todos',
   cocinaFilter:'activos',
   cajaFilter:'pendientes',
-  payDraft:null
+  payDraft:null,
+  selectedHistoryUser:null
 };
 
 /* =========================================================================
@@ -487,6 +489,7 @@ function afterRenderHooks(){
    ========================================================================= */
 async function viewPedidos(){
   const db = await loadDB();
+  const s = getSession();
   const cats = ['Todos', ...new Set(db.products.map(p=>p.category))];
   const chips = cats.map(c=>`<button class="chip ${state.prodFilter===c?'active':''}" onclick="setProdFilter('${c}')">${c}</button>`).join('');
   const prods = db.products.filter(p=> state.prodFilter==='Todos' || p.category===state.prodFilter);
@@ -498,10 +501,24 @@ async function viewPedidos(){
       ${p.description ? `<span class="pdesc">${p.description}</span>` : ''}
     </button>`).join('') || `<div class="empty-state" style="grid-column:1/-1">Sin productos en esta categoría.</div>`;
 
+  // Alerta y sección para meseros con pedidos listos en barra
+  const myBarraOrders = db.orders.filter(o => o.waiterId === s.id && o.status === 'barra');
+  const barraAlertHTML = myBarraOrders.length ? `
+    <div class="card" style="margin-bottom:18px; border-color:var(--cilantro); background:#e2f0da22;">
+      <div class="section-title" style="color:var(--cilantro-dark);">🔔 Pedidos listos en barra para entregar</div>
+      ${myBarraOrders.map(o=>`
+        <div class="flex-between" style="padding:8px 0; border-bottom:1px dashed var(--line);">
+          <div><b>${o.folio}</b> · ${o.customer}</div>
+          <button class="btn btn-sm btn-success" onclick="setOrderStatus(${o.id}, 'entregado')">Marcar Entregado ✓</button>
+        </div>
+      `).join('')}
+    </div>` : '';
+
   return `
   <div class="view-head">
     <div><h2>Levantar pedido</h2><p>Selecciona productos, indica cantidades y envía a cocina y caja.</p></div>
   </div>
+  ${barraAlertHTML}
   <div class="order-grid">
     <div class="card">
       <div class="section-title">Menú</div>
@@ -511,7 +528,7 @@ async function viewPedidos(){
     <div class="card">
       <div class="section-title">Datos del pedido</div>
       <div class="field">
-        <label>Cliente / Mesa</label>
+        <label>Cliente / Mesa *</label>
         <input type="text" id="custName" placeholder="Nombre del cliente o número de mesa" value="${state.customer}" oninput="state.customer=this.value">
       </div>
       <div id="cartWrap"></div>
@@ -521,7 +538,7 @@ async function viewPedidos(){
       </div>
       <div class="field">
         <label>Tomado por</label>
-        <input type="text" value="${getSession().name} (${ROLE_LABEL[getSession().role]})" disabled style="background:var(--bg-alt); color:var(--ink-soft);">
+        <input type="text" value="${s.name} (${ROLE_LABEL[s.role]})" disabled style="background:var(--bg-alt); color:var(--ink-soft);">
       </div>
       <button class="btn btn-primary btn-block" onclick="submitOrder()">Enviar a cocina y caja →</button>
     </div>
@@ -569,6 +586,7 @@ function renderCart(){
   wrap.innerHTML = items + `<div class="total-row"><span>Total</span><span>${money(total)}</span></div>`;
 }
 async function submitOrder(){
+  if(!state.customer.trim()){ toast('Debes ingresar la información del cliente o mesa'); return; }
   if(state.cart.length===0){ toast('Agrega al menos un producto'); return; }
   const db = await loadDB();
   const s = getSession();
@@ -576,7 +594,7 @@ async function submitOrder(){
   const order = {
     id: nextId(db,'order'),
     folio: 'B-'+String(db.counters.order-1).padStart(4,'0'),
-    customer: state.customer.trim() || 'Cliente sin nombre',
+    customer: state.customer.trim(),
     items: state.cart.map(i=>({...i})),
     generalNotes: state.generalNotes.trim(),
     waiterId: s.id, waiterName: s.name,
@@ -596,12 +614,12 @@ async function submitOrder(){
 /* =========================================================================
    VIEW: COCINA
    ========================================================================= */
-const KITCHEN_STEPS = ['espera','proceso','listo','barra'];
-const KITCHEN_LABEL = {espera:'En espera', proceso:'En proceso', listo:'Listo', barra:'En barra'};
+const KITCHEN_STEPS = ['espera','proceso','listo','barra','entregado'];
+const KITCHEN_LABEL = {espera:'En espera', proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado'};
 async function viewCocina(){
   const db = await loadDB();
   let orders = [...db.orders];
-  if(state.cocinaFilter==='activos') orders = orders.filter(o=>o.status!=='barra');
+  if(state.cocinaFilter==='activos') orders = orders.filter(o=>o.status!=='entregado');
   orders.sort((a,b)=> new Date(a.createdAt)-new Date(b.createdAt));
 
   const cards = orders.map(o=>{
@@ -630,7 +648,7 @@ async function viewCocina(){
       </div>
       <div class="ticket-foot">
         ${o.status!=='espera'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
-        ${nextStep?`<button class="btn btn-sm btn-success btn-block" onclick="setOrderStatus(${o.id}, '${nextStep}')">Pasar a: ${KITCHEN_LABEL[nextStep]} →</button>`:`<span class="muted" style="font-size:12.5px;">✔ En barra</span>`}
+        ${nextStep?`<button class="btn btn-sm btn-success btn-block" onclick="setOrderStatus(${o.id}, '${nextStep}')">Pasar a: ${KITCHEN_LABEL[nextStep]} →</button>`:`<span class="muted" style="font-size:12.5px;">✔ Entregado</span>`}
       </div>
     </div>`;
   }).join('') || `<div class="empty-state"><span class="ic">🍲</span>No hay pedidos por preparar.</div>`;
@@ -992,13 +1010,14 @@ async function realizarCorte(){
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   const finalCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
-  if(!confirm('¿Realizar el corte del día? Esto registrará el cierre de caja.')) return;
+  if(!confirm('¿Realizar el corte del día? Esto registrará el cierre de caja y reiniciará el día.')) return;
   db.closures.push({
     id:uid(), date:tk, initialCash:db.cash.initial, finalCash,
     totalSales:dayS.total, byMethod:dayS.byMethod, ordersCount:dayS.count,
     closedBy:getSession().name, ts:new Date().toISOString()
   });
   db.cash = {date:null, initial:null, openedBy:null};
+  db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || todayKey(new Date(o.paidAt)) !== tk);
   saveDB(db);
   logHistory('Corte realizado', `Venta: ${money(dayS.total)}`);
   toast('Corte realizado con éxito');
@@ -1006,7 +1025,7 @@ async function realizarCorte(){
 }
 
 async function reiniciarVentasSemana(){
-  if(!confirm('¿Estás seguro de reiniciar/borrar las ventas de la semana actual? Esta acción no se puede deshacer.')) return;
+  if(!confirm('¿Estás seguro de reiniciar únicamente las ventas de la semana actual?')) return;
   const db = await loadDB();
   const wk = isoWeekKey();
   db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || isoWeekKey(new Date(o.paidAt)) !== wk);
@@ -1017,7 +1036,7 @@ async function reiniciarVentasSemana(){
 }
 
 async function reiniciarVentasMes(){
-  if(!confirm('¿Estás seguro de reiniciar/borrar las ventas del mes actual? Esta acción no se puede deshacer.')) return;
+  if(!confirm('¿Estás seguro de reiniciar únicamente las ventas del mes actual?')) return;
   const db = await loadDB();
   const mk = monthKey();
   db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || monthKey(new Date(o.paidAt)) !== mk);
@@ -1041,6 +1060,11 @@ async function printReport(){
 /* =========================================================================
    VIEW: USUARIOS
    ========================================================================= */
+function selectUserHistory(name){
+  state.selectedHistoryUser = state.selectedHistoryUser === name ? null : name;
+  renderView();
+}
+
 async function viewUsuarios(){
   const db = await loadDB();
   const rows = db.users.map(u=>`
@@ -1048,14 +1072,20 @@ async function viewUsuarios(){
       <td>${u.name}</td>
       <td>${u.username}</td>
       <td><span class="badge badge-${u.role}">${ROLE_LABEL[u.role]}</span></td>
-      <td style="text-align:right;">
+      <td style="text-align:right; display:flex; gap:6px; justify-content:flex-end; align-items:center;">
+        <button class="btn btn-sm ${state.selectedHistoryUser===u.name?'btn-primary':''}" onclick="selectUserHistory('${u.name}')">Historial</button>
         <button class="btn btn-sm" onclick="openUserModal(${u.id})">Editar</button>
         ${u.username==='Brian'?'':`<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id})">Eliminar</button>`}
       </td>
     </tr>`).join('');
-  const hist = db.history.slice(0,80).map(h=>`
+
+  let histFiltered = db.history;
+  if(state.selectedHistoryUser){
+    histFiltered = db.history.filter(h => h.user === state.selectedHistoryUser);
+  }
+  const hist = histFiltered.slice(0,80).map(h=>`
     <div class="hist-item"><div class="ht">${fmtDateTime(h.ts)} · ${h.user}</div><div><b>${h.action}:</b> ${h.detail}</div></div>
-  `).join('') || `<div class="empty-state">Sin movimientos.</div>`;
+  `).join('') || `<div class="empty-state">Sin movimientos ${state.selectedHistoryUser ? 'para '+state.selectedHistoryUser : ''}.</div>`;
 
   return `
   <div class="view-head">
@@ -1063,11 +1093,11 @@ async function viewUsuarios(){
     <button class="btn btn-primary" onclick="openUserModal()">+ Nuevo usuario</button>
   </div>
   <div class="card table-wrap" style="margin-bottom:18px;">
-    <table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th></th></tr></thead>
+    <table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th style="text-align:right;">Acciones</th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>
   <div class="card">
-    <div class="section-title">Historial de movimientos</div>
+    <div class="section-title">Historial de movimientos ${state.selectedHistoryUser ? '· '+state.selectedHistoryUser : '(Selecciona un usuario)'}</div>
     <div class="hist-list">${hist}</div>
   </div>
   <div id="modalHost"></div>`;
