@@ -174,7 +174,7 @@ a{color:inherit;}
 .status-rail .dot{width:9px; height:9px; border-radius:50%; background:var(--line); flex-shrink:0;}
 .status-rail .seg{flex:1; height:3px; background:var(--line);}
 .status-rail .dot.done, .status-rail .seg.done{background:var(--cilantro);}
-.ticket-foot{display:flex; gap:8px; padding:10px 16px 16px;}
+.ticket-foot{display:flex; gap:8px; padding:10px 16px 16px; flex-wrap:wrap;}
 
 /* ---------- Caja ---------- */
 .caja-grid{display:grid; grid-template-columns: 1fr 380px; gap:18px; align-items:start;}
@@ -260,7 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby70ANzYUycLZzAoZqRz6z261gTuEYPAyTmoMNDiFG3bN2arZ2ribSZHaBkfCGGNuHy/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxcC7atJN-zDuolm4xXac7O60U2tBJJMEK_pBP7qmrAL8eZZv_yCCDbRi28RLncqkPI/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 let isSaving = false;
@@ -275,7 +275,7 @@ function isoWeekKey(d=new Date()){
 }
 function monthKey(d=new Date()){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function money(n){ return '$'+(Number(n)||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function fmtDateTime(iso){ const d=new Date(iso); return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }
+function fmtDateTime(iso){ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 
 function seedDB(){
@@ -322,7 +322,6 @@ async function loadDB(force = false){
 function saveDB(db){
   dbCache = db;
   isSaving = true;
-  // Se quitó mode: 'no-cors' para poder leer los errores del backend correctamente.
   fetch(SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({action: 'saveDB', db: db}),
@@ -508,6 +507,34 @@ function afterRenderHooks(){
 }
 
 /* =========================================================================
+   CANCELACIÓN DE PEDIDOS
+   ========================================================================= */
+async function cancelOrder(orderId){
+  const db = await loadDB();
+  const o = db.orders.find(x=>x.id===orderId);
+  if(!o) return;
+  
+  const reason = prompt(`Ingrese el motivo de cancelación para el pedido ${o.folio}:`);
+  if(reason === null) return;
+  if(!reason.trim()){
+    toast('El motivo de cancelación es obligatorio');
+    return;
+  }
+  
+  const s = getSession();
+  o.status = 'cancelado';
+  o.paymentStatus = 'cancelado';
+  o.canceledBy = s ? s.name : '—';
+  o.canceledAt = new Date().toISOString();
+  o.cancelReason = reason.trim();
+  
+  logHistory(db, 'Pedido cancelado', `${o.folio} cancelado por ${o.canceledBy}. Motivo: ${o.cancelReason}`);
+  toast(`Pedido ${o.folio} cancelado`);
+  saveDB(db);
+  renderView();
+}
+
+/* =========================================================================
    VIEW: PEDIDOS
    ========================================================================= */
 async function viewPedidos(){
@@ -621,9 +648,11 @@ async function submitOrder(){
     generalNotes: state.generalNotes.trim(),
     waiterId: s.id, waiterName: s.name,
     status:'pendiente', paymentStatus:'pendiente',
-    payments:[], total,
+    payments:[], total, originalTotal: total,
     createdAt: new Date().toISOString(),
-    paidAt:null, paidBy:null
+    paidAt:null, paidBy:null,
+    tip:0, discount:0, discountReason:'', change:0,
+    canceledBy:null, canceledAt:null, cancelReason:''
   };
   db.orders.unshift(order);
   logHistory(db, 'Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
@@ -636,16 +665,17 @@ async function submitOrder(){
    VIEW: COCINA
    ========================================================================= */
 const KITCHEN_STEPS = ['pendiente','en_proceso','listo','barra','entregado'];
-const KITCHEN_LABEL = {pendiente:'Pendiente', en_proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado'};
+const KITCHEN_LABEL = {pendiente:'Pendiente', en_proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado', cancelado:'Cancelado'};
 async function viewCocina(){
   const db = await loadDB();
   let orders = [...db.orders];
-  if(state.cocinaFilter==='activos') orders = orders.filter(o=>o.status!=='entregado');
+  if(state.cocinaFilter==='activos') orders = orders.filter(o=>o.status!=='entregado' && o.status!=='cancelado');
   orders.sort((a,b)=> new Date(a.createdAt)-new Date(b.createdAt));
 
   const cards = orders.map(o=>{
+    const isCanceled = o.status === 'cancelado';
     const stepIdx = KITCHEN_STEPS.indexOf(o.status);
-    const rail = KITCHEN_STEPS.map((st,i)=>{
+    const rail = isCanceled ? '' : KITCHEN_STEPS.map((st,i)=>{
       const dot = `<div class="dot ${i<=stepIdx?'done':''}"></div>`;
       const seg = i<KITCHEN_STEPS.length-1 ? `<div class="seg ${i<stepIdx?'done':''}"></div>` : '';
       return dot+seg;
@@ -654,7 +684,9 @@ async function viewCocina(){
     const nextStep = KITCHEN_STEPS[stepIdx+1];
     
     let btnHTML;
-    if(nextStep) {
+    if(isCanceled) {
+      btnHTML = `<span class="muted" style="color:var(--danger); font-size:12.5px;">✖ Pedido Cancelado</span>`;
+    } else if(nextStep) {
       let btnLabel = `Pasar a: ${KITCHEN_LABEL[nextStep]} →`;
       if (o.status === 'pendiente') {
           btnLabel = 'Preparar';
@@ -665,23 +697,25 @@ async function viewCocina(){
     }
 
     return `
-    <div class="ticket-card">
+    <div class="ticket-card" ${isCanceled?'style="border-color:var(--danger); background:#fcf0f0;"':''}>
       <div class="ticket-head">
         <div class="flex-between">
           <span class="folio">${o.folio}</span>
-          <span class="badge badge-${o.status}">${KITCHEN_LABEL[o.status]}</span>
+          <span class="badge ${isCanceled?'badge-pendiente':`badge-${o.status}`}">${KITCHEN_LABEL[o.status]}</span>
         </div>
         <div class="meta">Mesero: ${o.waiterName} · ${fmtDateTime(o.createdAt)}</div>
         <div class="meta">Cliente: ${o.customer}</div>
+        ${isCanceled?`<div class="meta" style="color:var(--danger); margin-top:4px;"><b>Canceló:</b> ${o.canceledBy} (${fmtDateTime(o.canceledAt)})<br><b>Motivo:</b> ${o.cancelReason}</div>`:''}
       </div>
-      <div class="status-rail">${rail}</div>
+      ${isCanceled?'':`<div class="status-rail">${rail}</div>`}
       <div class="ticket-body">
         <ul>${items}</ul>
         ${o.generalNotes?`<div class="ticket-note">📝 ${o.generalNotes}</div>`:''}
       </div>
       <div class="ticket-foot">
-        ${o.status!=='pendiente'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
+        ${!isCanceled && o.status!=='pendiente'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
         ${btnHTML}
+        ${!isCanceled && o.status!=='entregado'?`<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">Cancelar</button>`:''}
       </div>
     </div>`;
   }).join('') || `<div class="empty-state"><span class="ic">🍲</span>No hay pedidos por preparar.</div>`;
@@ -712,22 +746,35 @@ async function setOrderStatus(id, status){
 async function viewCaja(){
   const db = await loadDB();
   let orders = [...db.orders];
-  if(state.cajaFilter==='pendientes') orders = orders.filter(o=>o.paymentStatus==='pendiente');
+  if(state.cajaFilter==='pendientes') orders = orders.filter(o=>o.paymentStatus==='pendiente' && o.status!=='cancelado');
+  else if(state.cajaFilter==='cancelados') orders = orders.filter(o=>o.status==='cancelado');
   orders.sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt));
 
-  const rows = orders.map(o=>`
-    <div class="caja-row">
+  const rows = orders.map(o=>{
+    const isCanceled = o.status === 'cancelado';
+    const statusLabel = isCanceled ? 'Cancelado' : (o.paymentStatus==='pagado'?'Pagado':'Pendiente');
+    const badgeClass = isCanceled ? 'badge-pendiente' : (o.paymentStatus==='pagado'?'badge-pagado':'badge-pendiente');
+
+    return `
+    <div class="caja-row" ${isCanceled?'style="background:#fcf0f0; border-color:#e8baba;"':''}>
       <div class="cinfo">
         <div class="cname">${o.folio} · ${o.customer}</div>
-        <div class="csub">Mesero: ${o.waiterName} · <span class="badge badge-${o.status}">${KITCHEN_LABEL[o.status]}</span> · ${fmtDateTime(o.createdAt)}</div>
+        <div class="csub">Mesero: ${o.waiterName} · <span class="badge badge-${isCanceled?'pendiente':o.status}">${isCanceled?'Cancelado':KITCHEN_LABEL[o.status]}</span> · ${fmtDateTime(o.createdAt)}</div>
+        ${isCanceled ? `<div class="csub" style="color:var(--danger); margin-top:4px;"><b>Cancelado por:</b> ${o.canceledBy} (${fmtDateTime(o.canceledAt)}) · <b>Motivo:</b> ${o.cancelReason||'Sin motivo'}</div>` : ''}
+        ${o.discount > 0 ? `<div class="csub" style="color:var(--brick);"><b>Descuento:</b> -${money(o.discount)} (${o.discountReason||''})</div>` : ''}
+        ${o.tip > 0 ? `<div class="csub" style="color:var(--cilantro-dark);"><b>Propina:</b> ${money(o.tip)}</div>` : ''}
       </div>
       <div class="camount">${money(o.total)}</div>
-      <div style="display:flex; gap:6px;">
-        <span class="badge badge-${o.paymentStatus}">${o.paymentStatus==='pagado'?'Pagado':'Pendiente'}</span>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <span class="badge ${badgeClass}">${statusLabel}</span>
         <button class="btn btn-sm" onclick="openTicket(${o.id})">Ticket</button>
-        ${o.paymentStatus==='pendiente'?`<button class="btn btn-sm btn-primary" onclick="openPayModal(${o.id})">Cobrar</button>`:''}
+        ${!isCanceled && o.paymentStatus==='pendiente'?`
+          <button class="btn btn-sm btn-primary" onclick="openPayModal(${o.id})">Cobrar</button>
+          <button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">Cancelar</button>
+        `:''}
       </div>
-    </div>`).join('') || `<div class="empty-state"><span class="ic">💳</span>No hay cuentas en esta vista.</div>`;
+    </div>`;
+  }).join('') || `<div class="empty-state"><span class="ic">💳</span>No hay cuentas en esta vista.</div>`;
 
   return `
   <div class="view-head">
@@ -735,6 +782,7 @@ async function viewCaja(){
     <div class="prod-cats">
       <button class="chip ${state.cajaFilter==='pendientes'?'active':''}" onclick="setCajaFilter('pendientes')">Pendientes</button>
       <button class="chip ${state.cajaFilter==='todos'?'active':''}" onclick="setCajaFilter('todos')">Todos</button>
+      <button class="chip ${state.cajaFilter==='cancelados'?'active':''}" onclick="setCajaFilter('cancelados')">Cancelados</button>
     </div>
   </div>
   <div class="caja-grid">
@@ -765,16 +813,31 @@ async function openPayModal(orderId){
   const db = await loadDB();
   const o = db.orders.find(x=>x.id===orderId);
   if(!o) return;
-  state.payDraft = {orderId, splits:[{method:'efectivo', amount:o.total}]};
+  const originalTotal = o.originalTotal !== undefined ? o.originalTotal : o.total;
+  state.payDraft = {
+    orderId,
+    originalTotal,
+    discount: o.discount || 0,
+    discountReason: o.discountReason || '',
+    tip: o.tip || 0,
+    splits: [{method:'efectivo', amount: originalTotal}]
+  };
   renderPayModal();
 }
+
 async function renderPayModal(){
   const db = await loadDB();
   const d = state.payDraft;
   if(!d){ document.getElementById('modalHost').innerHTML=''; return; }
   const o = db.orders.find(x=>x.id===d.orderId);
-  const paidSum = d.splits.reduce((a,s)=>a+ (Number(s.amount)||0),0);
-  const remaining = +(o.total - paidSum).toFixed(2);
+  
+  const originalTotal = d.originalTotal;
+  const discount = Math.min(originalTotal, Math.max(0, parseFloat(d.discount)||0));
+  const finalTotal = Math.max(0, originalTotal - discount);
+  const paidSum = d.splits.reduce((a,s)=>a+(Number(s.amount)||0),0);
+  const remaining = +(finalTotal - paidSum).toFixed(2);
+  const change = remaining < 0 ? Math.abs(remaining) : 0;
+  
   const splitsHTML = d.splits.map((s,idx)=>`
     <div class="split-row">
       <select onchange="updateSplitMethod(${idx}, this.value)">
@@ -791,37 +854,128 @@ async function renderPayModal(){
     <div class="modal">
       <button class="modal-close" onclick="closePayModal()">✕</button>
       <h2>Cobrar ${o.folio}</h2>
-      <p class="muted" style="margin-bottom:14px;">${o.customer} · Total: <b>${money(o.total)}</b></p>
+      <p class="muted" style="margin-bottom:10px;">${o.customer} · Subtotal original: <b>${money(originalTotal)}</b></p>
+      
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div class="field" style="margin-bottom:0;">
+          <label>Descuento ($)</label>
+          <input id="payDiscountInput" type="number" min="0" step="0.5" value="${d.discount || ''}" placeholder="0.00" oninput="updatePayDiscount(this.value)">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Propina ($)</label>
+          <input id="payTipInput" type="number" min="0" step="0.5" value="${d.tip || ''}" placeholder="0.00" oninput="updatePayTip(this.value)">
+        </div>
+      </div>
+      
+      <div class="field" style="margin-bottom:14px;">
+        <label>Motivo del descuento <span style="color:var(--danger)">*</span></label>
+        <input id="payDiscountReasonInput" type="text" placeholder="Ej. Cliente frecuente, Cortesía..." value="${d.discountReason || ''}" oninput="updatePayDiscountReason(this.value)">
+        <div id="payDiscountReasonWarning" style="color:var(--danger); font-size:11.5px; margin-top:3px; display:${discount > 0 && !d.discountReason.trim() ? 'block' : 'none'};">El motivo es obligatorio cuando se aplica descuento.</div>
+      </div>
+
+      <div style="font-weight:700; font-size:15px; margin-bottom:12px; background:var(--bg-alt); padding:8px 12px; border-radius:8px; display:flex; justify-content:space-between;">
+        <span>Total a cobrar:</span>
+        <span id="payModalFinalTotal" style="color:var(--brick);">${money(finalTotal)}</span>
+      </div>
+
       <div class="section-title">Formas de pago</div>
       ${splitsHTML}
-      <button class="btn btn-sm" onclick="addSplit()">+ Dividir pago</button>
+      <button class="btn btn-sm" onclick="addSplit()" style="margin-top:4px;">+ Dividir pago</button>
+      
       <div class="total-row" style="margin-top:16px;">
-        <span>${remaining === 0 ? 'Cuenta saldada' : (remaining > 0 ? 'Falta por cobrar' : 'Cambio')}</span>
-        <span style="color:${remaining <= 0 ? 'var(--cilantro)':'var(--brick)'}">${money(Math.abs(remaining))}</span>
+        <span id="payModalRemainingText">${remaining === 0 ? 'Cuenta saldada' : (remaining > 0 ? 'Falta por cobrar' : 'Cambio')}</span>
+        <span id="payModalRemaining" style="color:${remaining <= 0 ? 'var(--cilantro)':'var(--brick)'}">${money(Math.abs(remaining))}</span>
       </div>
-      <button class="btn btn-primary btn-block" style="margin-top:14px;" ${remaining > 0 ? 'disabled' : ''} onclick="confirmPayment()">Confirmar cobro</button>
+      
+      <button id="payConfirmBtn" class="btn btn-primary btn-block" style="margin-top:14px;" ${(remaining > 0 || (discount > 0 && !d.discountReason.trim())) ? 'disabled' : ''} onclick="confirmPayment()">Confirmar cobro</button>
     </div>
   </div>`;
 }
+
 function addSplit(){ state.payDraft.splits.push({method:'tarjeta', amount:0}); renderPayModal(); }
 function removeSplit(i){ state.payDraft.splits.splice(i,1); renderPayModal(); }
 function updateSplitMethod(i,v){ state.payDraft.splits[i].method=v; renderPayModal(); }
-function updateSplitAmount(i,v){ state.payDraft.splits[i].amount = parseFloat(v)||0; renderPayModal(); }
+
+function updateSplitAmount(i, v){
+  state.payDraft.splits[i].amount = parseFloat(v) || 0;
+  recalcPayModal();
+}
+function updatePayTip(v){
+  state.payDraft.tip = parseFloat(v) || 0;
+  recalcPayModal();
+}
+function updatePayDiscount(v){
+  state.payDraft.discount = parseFloat(v) || 0;
+  recalcPayModal();
+}
+function updatePayDiscountReason(v){
+  state.payDraft.discountReason = v;
+  recalcPayModal();
+}
+
+function recalcPayModal(){
+  if(!state.payDraft) return;
+  const d = state.payDraft;
+  const originalTotal = d.originalTotal;
+  const discount = Math.min(originalTotal, Math.max(0, parseFloat(d.discount)||0));
+  d.discount = discount;
+  const finalTotal = Math.max(0, originalTotal - discount);
+  const paidSum = d.splits.reduce((a,s)=>a+(Number(s.amount)||0),0);
+  const remaining = +(finalTotal - paidSum).toFixed(2);
+  const change = remaining < 0 ? Math.abs(remaining) : 0;
+  d.change = change;
+
+  const finalTotalEl = document.getElementById('payModalFinalTotal');
+  if(finalTotalEl) finalTotalEl.textContent = money(finalTotal);
+
+  const remTextEl = document.getElementById('payModalRemainingText');
+  const remEl = document.getElementById('payModalRemaining');
+  if(remEl && remTextEl){
+    if(remaining > 0){
+      remTextEl.textContent = 'Falta por cobrar';
+      remEl.style.color = 'var(--brick)';
+      remEl.textContent = money(remaining);
+    } else {
+      remTextEl.textContent = change > 0 ? 'Cambio a devolver' : 'Cuenta saldada';
+      remEl.style.color = 'var(--cilantro)';
+      remEl.textContent = money(change);
+    }
+  }
+
+  const reasonWarning = document.getElementById('payDiscountReasonWarning');
+  if(reasonWarning){
+    reasonWarning.style.display = (discount > 0 && !(d.discountReason||'').trim()) ? 'block' : 'none';
+  }
+
+  const btn = document.getElementById('payConfirmBtn');
+  if(btn){
+    if(remaining > 0 || (discount > 0 && !(d.discountReason||'').trim())){
+      btn.disabled = true;
+    } else {
+      btn.disabled = false;
+    }
+  }
+}
+
 function closePayModal(){ state.payDraft=null; document.getElementById('modalHost').innerHTML=''; }
 
 async function confirmPayment(){
   const db = await loadDB();
   const d = state.payDraft;
   const o = db.orders.find(x=>x.id===d.orderId);
+  if(!o) return;
   
-  if (db.counters.weekSales === undefined) {
-    db.counters.weekSales = 0;
-  }
-  if (db.counters.monthSales === undefined) {
-    db.counters.monthSales = 0;
-  }
+  if (db.counters.weekSales === undefined) db.counters.weekSales = 0;
+  if (db.counters.monthSales === undefined) db.counters.monthSales = 0;
 
-  o.paymentStatus='pagado';
+  o.originalTotal = d.originalTotal;
+  o.discount = d.discount || 0;
+  o.discountReason = (d.discountReason || '').trim();
+  o.tip = d.tip || 0;
+  o.total = Math.max(0, o.originalTotal - o.discount);
+  o.change = d.change || 0;
+
+  o.paymentStatus = 'pagado';
   o.payments = d.splits.map(s=>({method:s.method, amount:Number(s.amount)||0}));
   o.paidAt = new Date().toISOString();
   o.paidBy = getSession().name;
@@ -829,7 +983,7 @@ async function confirmPayment(){
   db.counters.weekSales += o.total;
   db.counters.monthSales += o.total;
 
-  logHistory(db, 'Cobro realizado', `${o.folio} · ${money(o.total)}`);
+  logHistory(db, 'Cobro realizado', `${o.folio} · Total: ${money(o.total)}${o.discount>0?` (Desc: -${money(o.discount)})`:''}${o.tip>0?` (Propina: ${money(o.tip)})`:''}`);
   toast('Pago registrado');
   closePayModal();
   renderView();
@@ -842,6 +996,10 @@ async function openTicket(orderId){
   if(!o) return;
   const items = o.items.map(i=>`<li><span>${i.qty}x ${i.name}</span><b>${money(i.price*i.qty)}</b></li>`).join('');
   const pays = o.payments.length? `<div style="margin-top:6px;">${o.payments.map(p=>`<div style="display:flex;justify-content:space-between;"><span>${p.method}</span><b>${money(p.amount)}</b></div>`).join('')}</div>` : '';
+  
+  const paidTotal = o.payments ? o.payments.reduce((a,p)=>a+p.amount,0) : 0;
+  const changeAmt = o.change !== undefined && o.change > 0 ? o.change : (paidTotal > o.total ? paidTotal - o.total : 0);
+
   document.getElementById('modalHost').insertAdjacentHTML('beforeend', `
   <div class="modal-overlay" onclick="if(event.target===this) closeTicket()">
     <div class="modal" style="max-width:340px; font-family:'IBM Plex Mono',monospace;">
@@ -852,11 +1010,15 @@ async function openTicket(orderId){
       </div>
       <div style="font-size:12.5px; border-top:1px dashed var(--line); border-bottom:1px dashed var(--line); padding:8px 0; margin-bottom:8px;">
         Cliente: ${o.customer}<br>Atendió: ${o.waiterName}
+        ${o.status==='cancelado'?`<br><b style="color:var(--danger)">PEDIDO CANCELADO</b><br><small>Por: ${o.canceledBy} (${fmtDateTime(o.canceledAt)})<br>Motivo: ${o.cancelReason}</small>`:''}
       </div>
       <ul style="list-style:none; padding:0; margin:0; font-size:13px;">${items}</ul>
       ${o.generalNotes?`<div class="muted" style="font-size:12px; margin-top:6px;">Notas: ${o.generalNotes}</div>`:''}
+      ${o.discount > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:6px;color:var(--danger);"><span>Descuento (${o.discountReason || 'Aplicado'}):</span><b>-${money(o.discount)}</b></div>` : ''}
       <div class="total-row"><span>Total</span><span>${money(o.total)}</span></div>
+      ${o.tip > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:4px;color:var(--cilantro-dark);"><span>Propina:</span><b>${money(o.tip)}</b></div>` : ''}
       ${pays}
+      ${changeAmt > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:6px;padding-top:4px;border-top:1px dashed var(--line);font-weight:bold;"><span>Cambio:</span><b>${money(changeAmt)}</b></div>` : ''}
       <div class="muted" style="text-align:center; font-size:11px; margin-top:10px;">¡Gracias por su compra!</div>
       <button class="btn btn-primary btn-block" style="margin-top:14px; font-family:'Figtree',sans-serif;" onclick="printTicket(${o.id})">🖨️ Imprimir</button>
     </div>
@@ -869,17 +1031,25 @@ async function printTicket(orderId){
   const o = db.orders.find(x=>x.id===orderId);
   const items = o.items.map(i=>`<div style="display:flex;justify-content:space-between;">${i.qty}x ${i.name}<b>${money(i.price*i.qty)}</b></div>`).join('');
   const pays = o.payments.map(p=>`<div style="display:flex;justify-content:space-between;">${p.method}<b>${money(p.amount)}</b></div>`).join('');
+  
+  const paidTotal = o.payments ? o.payments.reduce((a,p)=>a+p.amount,0) : 0;
+  const changeAmt = o.change !== undefined && o.change > 0 ? o.change : (paidTotal > o.total ? paidTotal - o.total : 0);
+
   const w = window.open('', '_blank', 'width=380,height=600');
   w.document.write(`<html><head><title>Ticket ${o.folio}</title>
   <style>body{font-family:monospace; padding:14px; font-size:13px;} h2{text-align:center;margin:0 0 4px;} .c{text-align:center;} hr{border:none;border-top:1px dashed #999;}</style>
   </head><body>
   <h2>Birria Express</h2>
   <div class="c">${o.folio} · ${fmtDateTime(o.createdAt)}</div>
-  <hr>Cliente: ${o.customer}<br>Atendió: ${o.waiterName}<hr>
+  <hr>Cliente: ${o.customer}<br>Atendió: ${o.waiterName}
+  ${o.status==='cancelado'?`<br><b style="color:red">CANCELADO</b><br>Por: ${o.canceledBy}<br>Motivo: ${o.cancelReason}`:''}<hr>
   ${items}
   ${o.generalNotes?'<hr>Notas: '+o.generalNotes:''}
+  ${o.discount > 0 ? `<hr><div style="display:flex;justify-content:space-between;">Descuento (${o.discountReason||''}):<span>-${money(o.discount)}</span></div>`:''}
   <hr><div style="display:flex;justify-content:space-between;font-weight:bold;">TOTAL<span>${money(o.total)}</span></div>
+  ${o.tip > 0 ? `<div style="display:flex;justify-content:space-between;">Propina:<span>${money(o.tip)}</span></div>`:''}
   <hr>${pays}
+  ${changeAmt > 0 ? `<hr><div style="display:flex;justify-content:space-between;font-weight:bold;">CAMBIO<span>${money(changeAmt)}</span></div>`:''}
   <div class="c" style="margin-top:10px;">¡Gracias por su compra!</div>
   <script>window.onload=()=>{window.print();}<\/script>
   </body></html>`);
@@ -988,9 +1158,11 @@ async function viewCorte(){
     const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
     const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
+    const closureTimeStr = c.ts ? fmtDateTime(c.ts) : c.date;
+
     return `
       <tr>
-        <td>${c.date}</td>
+        <td><b>${closureTimeStr}</b></td>
         <td class="mono">${money(c.initialCash)}</td>
         <td class="mono">Esp: ${money(c.finalCash)}<br>Real: ${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td>
         <td class="mono" style="color:${diff >= 0 ? 'var(--cilantro)' : 'var(--danger)'};">${diff >= 0 ? '+' : ''}${money(diff)}</td>
@@ -1046,7 +1218,7 @@ async function viewCorte(){
   <div class="card">
     <div class="section-title">Historial de cortes</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Efectivo</th><th>Tarjeta</th><th>Transf.</th><th>Total</th><th>Cerró</th></tr></thead>
+      <thead><tr><th>Fecha y Hora</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Efectivo</th><th>Tarjeta</th><th>Transf.</th><th>Total</th><th>Cerró</th></tr></thead>
       <tbody>${closuresRows}</tbody>
     </table></div>
   </div>`;
@@ -1112,11 +1284,13 @@ async function printReport(){
     const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
     const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
-    return `<tr><td>${c.date}</td><td>${money(c.initialCash)}</td><td>${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td><td style="color:${diff>=0?'green':'red'}">${diff>=0?'+':''}${money(diff)}</td><td>${money(efectivo)}</td><td>${money(tarjeta)}</td><td>${money(transferencia)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`;
+    const closureTimeStr = c.ts ? fmtDateTime(c.ts) : c.date;
+
+    return `<tr><td>${closureTimeStr}</td><td>${money(c.initialCash)}</td><td>${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td><td style="color:${diff>=0?'green':'red'}">${diff>=0?'+':''}${money(diff)}</td><td>${money(efectivo)}</td><td>${money(tarjeta)}</td><td>${money(transferencia)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`;
   }).join('') || '<tr><td colspan="10">Sin cortes</td></tr>';
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Reporte</title><style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} td,th{border:1px solid #ccc;padding:6px;}</style></head>
-  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Efectivo</th><th>Tarjeta</th><th>Transf</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
+  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha y Hora</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Efectivo</th><th>Tarjeta</th><th>Transf</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
   <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
