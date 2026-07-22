@@ -261,7 +261,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxMux9phHgQ2FV7dcm36MZ7s2SaB5694NKM6cboPl9p7MYwugdULo6Dr_OEgj95-7qt/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzi3ClhMFNWbBFYVFU3smi6uTQXIPaGzltEkRPwQd-xffFYlFtLdXB2uLterbcpn9pj/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -319,11 +319,11 @@ async function loadDB(force = false){
 
 function saveDB(db){
   dbCache = db;
-  // Se cambia a petición POST para evitar el límite de caracteres en la URL y corregir errores de guardado y sincronización
+  // Petición POST asíncrona en segundo plano para evitar bloqueos
   fetch(SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({action: 'saveDB', db: db}),
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' } // text/plain evita preflight options en Apps Script
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
   }).catch(e => console.error("Error sincronizando en segundo plano:", e));
 }
 
@@ -463,14 +463,14 @@ async function renderShell(){
 
 function goView(v){ state.view = v; state.cart=[]; state.customer=''; state.generalNotes=''; renderShell(); }
 async function doLogout(){ 
-  const db = await loadDB(true);
+  const db = await loadDB();
   logHistory(db, 'Cierre de sesión', (getSession()||{}).name+' cerró sesión'); 
   clearSession(); 
   renderLogin(); 
 }
 async function manualRefresh(){
   dbCache = null;
-  await loadDB();
+  await loadDB(true);
   await renderView();
   toast('Sincronizado con Google Sheets');
 }
@@ -594,7 +594,7 @@ function renderCart(){
 async function submitOrder(){
   if(!state.customer.trim()){ toast('Debes ingresar la información del cliente o mesa'); return; }
   if(state.cart.length===0){ toast('Agrega al menos un producto'); return; }
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   const s = getSession();
   const total = state.cart.reduce((a,i)=>a+i.price*i.qty,0);
   const order = {
@@ -670,7 +670,7 @@ async function viewCocina(){
 }
 function setCocinaFilter(f){ state.cocinaFilter=f; renderView(); }
 async function setOrderStatus(id, status){
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea para respuesta inmediata
   const o = db.orders.find(x=>x.id===id);
   if(!o) return;
   o.status = status;
@@ -782,7 +782,7 @@ function updateSplitAmount(i,v){ state.payDraft.splits[i].amount = parseFloat(v)
 function closePayModal(){ state.payDraft=null; document.getElementById('modalHost').innerHTML=''; }
 
 async function confirmPayment(){
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   const d = state.payDraft;
   const o = db.orders.find(x=>x.id===d.orderId);
   
@@ -907,7 +907,7 @@ async function saveProduct(pid){
   const price = parseFloat(document.getElementById('pfPrice').value)||0;
   const description = document.getElementById('pfDesc').value.trim();
   if(!name){ toast('Escribe un nombre'); return; }
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   if(pid){
     const p = db.products.find(x=>x.id===pid);
     Object.assign(p, {name, category:cat, price, description});
@@ -923,7 +923,7 @@ async function saveProduct(pid){
 }
 
 async function deleteProduct(pid){
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   const p = db.products.find(x=>x.id===pid);
   if(!confirm('¿Eliminar "'+(p?p.name:'')+'"?')) return;
   db.products = db.products.filter(x=>x.id!==pid);
@@ -1026,7 +1026,7 @@ async function viewCorte(){
 
 async function abrirCaja(){
   const val = parseFloat(document.getElementById('initCash').value)||0;
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   db.cash = {date:todayKey(), initial:val, openedBy:getSession().name};
   logHistory(db, 'Apertura de caja', 'Inicial: '+money(val));
   toast('Caja abierta');
@@ -1034,7 +1034,7 @@ async function abrirCaja(){
 }
 
 async function realizarCorte(){
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   const expectedCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
@@ -1061,7 +1061,7 @@ async function realizarCorte(){
 
 async function reiniciarVentasSemana(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas de la semana actual?')) return;
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   db.counters.weekSales = 0;
   logHistory(db, 'Reinicio de semana', 'Se reiniciaron las ventas de la semana actual');
   toast('Ventas de la semana reiniciadas');
@@ -1070,7 +1070,7 @@ async function reiniciarVentasSemana(){
 
 async function reiniciarVentasMes(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas del mes actual?')) return;
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   db.counters.monthSales = 0;
   logHistory(db, 'Reinicio de mes', 'Se reiniciaron las ventas del mes actual');
   toast('Ventas del mes reiniciadas');
@@ -1165,7 +1165,7 @@ async function saveUser(uidNum){
   const password = document.getElementById('ufPass').value;
   const role = document.getElementById('ufRole').value;
   if(!name || !username || !password){ toast('Completa los campos'); return; }
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   if(db.users.some(x=>x.username.toLowerCase()===username.toLowerCase() && x.id!==uidNum)){
     toast('El usuario ya existe'); return;
   }
@@ -1184,7 +1184,7 @@ async function saveUser(uidNum){
 }
 
 async function deleteUser(uidNum){
-  const db = await loadDB(true);
+  const db = await loadDB(); // Optimizado: usa caché instantánea
   const u = db.users.find(x=>x.id===uidNum);
   if(!confirm('¿Eliminar a '+(u?u.name:'')+'?')) return;
   db.users = db.users.filter(x=>x.id!==uidNum);
@@ -1197,14 +1197,13 @@ async function deleteUser(uidNum){
    BOOT Y AUTO-REFRESH CONCURRENTE
    ========================================================================= */
 
-// Actualizar las vistas automáticamente para ver las acciones de otros usuarios
+// Actualizar las vistas automáticamente para ver las acciones de otros usuarios en segundo plano
 setInterval(async () => {
   if (getSession()) {
     const oldStr = JSON.stringify(dbCache);
     await loadDB(true);
     const newStr = JSON.stringify(dbCache);
     if (oldStr !== newStr) {
-      // Evitar interrumpir si el usuario está escribiendo en algún campo
       const activeTag = document.activeElement ? document.activeElement.tagName : '';
       if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
         renderView();
@@ -1218,7 +1217,7 @@ async function boot(){
   if(!s){ renderLogin(); return; }
   
   document.getElementById('root').innerHTML = `<div class="loading-overlay"><div style="font-size:36px;">🌶️</div>Conectando a Google Sheets...</div>`;
-  await loadDB();
+  await loadDB(true);
   renderShell();
 }
 
