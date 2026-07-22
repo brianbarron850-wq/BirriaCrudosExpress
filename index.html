@@ -160,7 +160,7 @@ a{color:inherit;}
 /* ---------- Kitchen tickets ---------- */
 .ticket-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:16px;}
 .ticket-card{background:var(--paper); border:1.5px solid var(--line); border-radius:12px; position:relative; overflow:hidden; box-shadow:var(--shadow);}
-.ticket-card::before{content:''; position:absolute; top:0; left:0; right:0; height:8px;
+.ticket-card::before{content:'absolute'; position:absolute; top:0; left:0; right:0; height:8px;
   background-image: radial-gradient(circle, var(--bg) 4px, transparent 4.5px);
   background-size: 16px 16px; background-position:0 -4px;}
 .ticket-head{padding:16px 16px 10px; border-bottom:1px dashed var(--line);}
@@ -301,24 +301,32 @@ function seedDB(){
   };
 }
 
-async function loadDB(){
-  if(dbCache) return dbCache;
+async function loadDB(force = false){
+  if(dbCache && !force) return dbCache;
   try{
     const res = await fetch(SCRIPT_URL + "?action=getDB");
     dbCache = await res.json();
     return dbCache;
   }catch(e){
     console.error(e);
-    toast("Error conectando a Google Sheets");
-    return seedDB();
+    if(!dbCache) {
+      toast("Error conectando a Google Sheets");
+      return seedDB();
+    }
+    return dbCache;
   }
 }
 
-// Sincronización robusta por parámetros para evitar bloqueo de CORS y redirecciones 302
 function saveDB(db){
   dbCache = db;
-  fetch(SCRIPT_URL + "?action=saveDB&db=" + encodeURIComponent(JSON.stringify(db)))
-    .catch(e => console.error("Error sincronizando en segundo plano:", e));
+  // Se cambia a POST para evitar errores cuando la base de datos es muy pesada y superar el límite de URLs, permitiendo el guardado y sincronización impecable
+  fetch(SCRIPT_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8'
+    },
+    body: JSON.stringify({action: 'saveDB', db: db})
+  }).catch(e => console.error("Error sincronizando en segundo plano:", e));
 }
 
 function nextId(db, key){ const n = db.counters[key]||1; db.counters[key]=n+1; return n; }
@@ -327,8 +335,7 @@ function getSession(){ try{ return JSON.parse(sessionStorage.getItem(SESSION_KEY
 function setSession(u){ sessionStorage.setItem(SESSION_KEY, JSON.stringify(u)); }
 function clearSession(){ sessionStorage.removeItem(SESSION_KEY); }
 
-async function logHistory(action, detail){
-  const db = await loadDB();
+function logHistory(db, action, detail){
   const s = getSession();
   db.history.unshift({id:uid(), ts:new Date().toISOString(), user:s?s.name:'—', role:s?s.role:'—', action, detail});
   if(db.history.length>500) db.history.length = 500;
@@ -398,14 +405,14 @@ function renderLogin(){
     e.preventDefault();
     const u = document.getElementById('loginUser').value.trim();
     const p = document.getElementById('loginPass').value;
-    const db = await loadDB();
+    const db = await loadDB(true);
     const user = db.users.find(x=>x.username.toLowerCase()===u.toLowerCase() && x.password===p);
     if(!user){
       document.getElementById('loginError').textContent = 'Usuario o contraseña incorrectos.';
       return;
     }
     setSession({id:user.id, name:user.name, username:user.username, role:user.role});
-    logHistory('Inicio de sesión', user.name+' ('+ROLE_LABEL[user.role]+') inició sesión');
+    logHistory(db, 'Inicio de sesión', user.name+' ('+ROLE_LABEL[user.role]+') inició sesión');
     boot();
   });
 }
@@ -451,12 +458,18 @@ async function renderShell(){
     </div>
   </div>
   <div class="bottomnav">${bottomItems}</div>
+  <div id="modalHost"></div>
   `;
   await renderView();
 }
 
 function goView(v){ state.view = v; state.cart=[]; state.customer=''; state.generalNotes=''; renderShell(); }
-async function doLogout(){ logHistory('Cierre de sesión', (getSession()||{}).name+' cerró sesión'); clearSession(); renderLogin(); }
+async function doLogout(){ 
+  const db = await loadDB(true);
+  logHistory(db, 'Cierre de sesión', (getSession()||{}).name+' cerró sesión'); 
+  clearSession(); 
+  renderLogin(); 
+}
 async function manualRefresh(){
   dbCache = null;
   await loadDB();
@@ -583,7 +596,7 @@ function renderCart(){
 async function submitOrder(){
   if(!state.customer.trim()){ toast('Debes ingresar la información del cliente o mesa'); return; }
   if(state.cart.length===0){ toast('Agrega al menos un producto'); return; }
-  const db = await loadDB();
+  const db = await loadDB(true);
   const s = getSession();
   const total = state.cart.reduce((a,i)=>a+i.price*i.qty,0);
   const order = {
@@ -599,8 +612,7 @@ async function submitOrder(){
     paidAt:null, paidBy:null
   };
   db.orders.unshift(order);
-  saveDB(db);
-  logHistory('Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
+  logHistory(db, 'Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
   state.cart=[]; state.customer=''; state.generalNotes='';
   toast('Pedido '+order.folio+' enviado');
   renderView();
@@ -660,12 +672,11 @@ async function viewCocina(){
 }
 function setCocinaFilter(f){ state.cocinaFilter=f; renderView(); }
 async function setOrderStatus(id, status){
-  const db = await loadDB();
+  const db = await loadDB(true);
   const o = db.orders.find(x=>x.id===id);
   if(!o) return;
   o.status = status;
-  saveDB(db);
-  logHistory('Estatus cocina', `${o.folio} → ${KITCHEN_LABEL[status]}`);
+  logHistory(db, 'Estatus cocina', `${o.folio} → ${KITCHEN_LABEL[status]}`);
   renderView();
 }
 
@@ -706,8 +717,7 @@ async function viewCaja(){
       <div class="section-title">Resumen del día</div>
       ${cajaResumenHTML(db)}
     </div>
-  </div>
-  <div id="modalHost"></div>`;
+  </div>`;
 }
 function setCajaFilter(f){ state.cajaFilter=f; renderView(); }
 function cajaResumenHTML(db){
@@ -774,15 +784,26 @@ function updateSplitAmount(i,v){ state.payDraft.splits[i].amount = parseFloat(v)
 function closePayModal(){ state.payDraft=null; document.getElementById('modalHost').innerHTML=''; }
 
 async function confirmPayment(){
-  const db = await loadDB();
+  const db = await loadDB(true);
   const d = state.payDraft;
   const o = db.orders.find(x=>x.id===d.orderId);
+  
+  if (db.counters.weekSales === undefined) {
+    db.counters.weekSales = 0;
+  }
+  if (db.counters.monthSales === undefined) {
+    db.counters.monthSales = 0;
+  }
+
   o.paymentStatus='pagado';
   o.payments = d.splits.map(s=>({method:s.method, amount:Number(s.amount)||0}));
   o.paidAt = new Date().toISOString();
   o.paidBy = getSession().name;
-  saveDB(db);
-  logHistory('Cobro realizado', `${o.folio} · ${money(o.total)}`);
+  
+  db.counters.weekSales += o.total;
+  db.counters.monthSales += o.total;
+
+  logHistory(db, 'Cobro realizado', `${o.folio} · ${money(o.total)}`);
   toast('Pago registrado');
   closePayModal();
   renderView();
@@ -862,8 +883,7 @@ async function viewProductos(){
   <div class="card table-wrap">
     <table><thead><tr><th>Nombre y Descripción</th><th>Categoría</th><th>Precio</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-  </div>
-  <div id="modalHost"></div>`;
+  </div>`;
 }
 
 async function openProductModal(pid){
@@ -889,29 +909,27 @@ async function saveProduct(pid){
   const price = parseFloat(document.getElementById('pfPrice').value)||0;
   const description = document.getElementById('pfDesc').value.trim();
   if(!name){ toast('Escribe un nombre'); return; }
-  const db = await loadDB();
+  const db = await loadDB(true);
   if(pid){
     const p = db.products.find(x=>x.id===pid);
     Object.assign(p, {name, category:cat, price, description});
-    logHistory('Producto editado', name);
+    logHistory(db, 'Producto editado', name);
   }else{
     const id = nextId(db,'product');
     db.products.push({id, name, category:cat, price, description});
-    logHistory('Producto creado', name);
+    logHistory(db, 'Producto creado', name);
   }
-  saveDB(db);
   closeModalHost();
   toast('Guardado');
   renderView();
 }
 
 async function deleteProduct(pid){
-  const db = await loadDB();
+  const db = await loadDB(true);
   const p = db.products.find(x=>x.id===pid);
   if(!confirm('¿Eliminar "'+(p?p.name:'')+'"?')) return;
   db.products = db.products.filter(x=>x.id!==pid);
-  saveDB(db);
-  logHistory('Producto eliminado', p?p.name:'');
+  logHistory(db, 'Producto eliminado', p?p.name:'');
   toast('Eliminado');
   renderView();
 }
@@ -932,13 +950,23 @@ async function viewCorte(){
   const db = await loadDB();
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
-  const weekS = computeSales(db, d=>isoWeekKey(d)===isoWeekKey());
-  const monthS = computeSales(db, d=>monthKey(d)===monthKey());
+  
+  let weekTotal = db.counters.weekSales;
+  if (weekTotal === undefined) {
+    weekTotal = 0;
+  }
+  
+  let monthTotal = db.counters.monthSales;
+  if (monthTotal === undefined) {
+    monthTotal = 0;
+  }
+  
   const cashOpen = db.cash.date===tk;
   const finalCash = (cashOpen? (Number(db.cash.initial)||0) : 0) + dayS.byMethod.efectivo;
 
   const closuresRows = [...db.closures].reverse().slice(0,10).map(c=> {
     const diff = c.difference !== undefined ? c.difference : 0;
+    const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
     const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
     return `
@@ -947,12 +975,14 @@ async function viewCorte(){
         <td class="mono">${money(c.initialCash)}</td>
         <td class="mono">Esp: ${money(c.finalCash)}<br>Real: ${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td>
         <td class="mono" style="color:${diff >= 0 ? 'var(--cilantro)' : 'var(--danger)'};">${diff >= 0 ? '+' : ''}${money(diff)}</td>
-        <td class="mono">Tarj: ${money(tarjeta)}<br>Transf: ${money(transferencia)}</td>
+        <td class="mono">${money(efectivo)}</td>
+        <td class="mono">${money(tarjeta)}</td>
+        <td class="mono">${money(transferencia)}</td>
         <td class="mono">${money(c.totalSales)}</td>
         <td>${c.closedBy}</td>
       </tr>
     `;
-  }).join('') || `<tr><td colspan="7" class="empty-state">Sin cortes registrados.</td></tr>`;
+  }).join('') || `<tr><td colspan="9" class="empty-state">Sin cortes registrados.</td></tr>`;
 
   return `
   <div class="view-head">
@@ -984,12 +1014,12 @@ async function viewCorte(){
     </div>
     <div class="stat-card">
       <div class="slabel">Venta de la semana</div>
-      <div class="sval">${money(weekS.total)}</div>
+      <div class="sval">${money(weekTotal)}</div>
       <button class="btn btn-sm btn-danger" style="margin-top:10px;" onclick="reiniciarVentasSemana()">Reiniciar semana</button>
     </div>
     <div class="stat-card">
       <div class="slabel">Venta del mes</div>
-      <div class="sval">${money(monthS.total)}</div>
+      <div class="sval">${money(monthTotal)}</div>
       <button class="btn btn-sm btn-danger" style="margin-top:10px;" onclick="reiniciarVentasMes()">Reiniciar mes</button>
     </div>
   </div>
@@ -997,7 +1027,7 @@ async function viewCorte(){
   <div class="card">
     <div class="section-title">Historial de cortes</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Otros Pagos</th><th>Total</th><th>Cerró</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Total</th><th>Cerró</th></tr></thead>
       <tbody>${closuresRows}</tbody>
     </table></div>
   </div>`;
@@ -1005,16 +1035,15 @@ async function viewCorte(){
 
 async function abrirCaja(){
   const val = parseFloat(document.getElementById('initCash').value)||0;
-  const db = await loadDB();
+  const db = await loadDB(true);
   db.cash = {date:todayKey(), initial:val, openedBy:getSession().name};
-  saveDB(db);
-  logHistory('Apertura de caja', 'Inicial: '+money(val));
+  logHistory(db, 'Apertura de caja', 'Inicial: '+money(val));
   toast('Caja abierta');
   renderView();
 }
 
 async function realizarCorte(){
-  const db = await loadDB();
+  const db = await loadDB(true);
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   const expectedCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
@@ -1034,30 +1063,25 @@ async function realizarCorte(){
   });
   db.cash = {date:null, initial:null, openedBy:null};
   db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || todayKey(new Date(o.paidAt)) !== tk);
-  saveDB(db);
-  logHistory('Corte realizado', `Venta: ${money(dayS.total)} | Diferencia: ${money(difference)}`);
+  logHistory(db, 'Corte realizado', `Venta: ${money(dayS.total)} | Diferencia: ${money(difference)}`);
   toast('Corte realizado con éxito');
   renderView();
 }
 
 async function reiniciarVentasSemana(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas de la semana actual?')) return;
-  const db = await loadDB();
-  const wk = isoWeekKey();
-  db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || isoWeekKey(new Date(o.paidAt)) !== wk);
-  saveDB(db);
-  logHistory('Reinicio de semana', 'Se reiniciaron las ventas de la semana actual');
+  const db = await loadDB(true);
+  db.counters.weekSales = 0;
+  logHistory(db, 'Reinicio de semana', 'Se reiniciaron las ventas de la semana actual');
   toast('Ventas de la semana reiniciadas');
   renderView();
 }
 
 async function reiniciarVentasMes(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas del mes actual?')) return;
-  const db = await loadDB();
-  const mk = monthKey();
-  db.orders = db.orders.filter(o => o.paymentStatus !== 'pagado' || monthKey(new Date(o.paidAt)) !== mk);
-  saveDB(db);
-  logHistory('Reinicio de mes', 'Se reiniciaron las ventas del mes actual');
+  const db = await loadDB(true);
+  db.counters.monthSales = 0;
+  logHistory(db, 'Reinicio de mes', 'Se reiniciaron las ventas del mes actual');
   toast('Ventas del mes reiniciadas');
   renderView();
 }
@@ -1066,13 +1090,14 @@ async function printReport(){
   const db = await loadDB();
   const rows = [...db.closures].reverse().map(c=>{
     const diff = c.difference !== undefined ? c.difference : 0;
+    const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
     const transferencia = c.byMethod && c.byMethod.transferencia ? c.byMethod.transferencia : 0;
-    return `<tr><td>${c.date}</td><td>${money(c.initialCash)}</td><td>${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td><td style="color:${diff>=0?'green':'red'}">${diff>=0?'+':''}${money(diff)}</td><td>Tarjeta: ${money(tarjeta)}<br>Transf: ${money(transferencia)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`;
-  }).join('') || '<tr><td colspan="8">Sin cortes</td></tr>';
+    return `<tr><td>${c.date}</td><td>${money(c.initialCash)}</td><td>${money(c.realFinalCash !== undefined ? c.realFinalCash : c.finalCash)}</td><td style="color:${diff>=0?'green':'red'}">${diff>=0?'+':''}${money(diff)}</td><td>${money(efectivo)}</td><td>${money(tarjeta)}</td><td>${money(transferencia)}</td><td>${money(c.totalSales)}</td><td>${c.ordersCount}</td><td>${c.closedBy}</td></tr>`;
+  }).join('') || '<tr><td colspan="10">Sin cortes</td></tr>';
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Reporte</title><style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} td,th{border:1px solid #ccc;padding:6px;}</style></head>
-  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Otros Pagos</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
+  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
   <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
@@ -1119,8 +1144,7 @@ async function viewUsuarios(){
   <div class="card">
     <div class="section-title">Historial de movimientos ${state.selectedHistoryUser ? '· '+state.selectedHistoryUser : '(Selecciona un usuario)'}</div>
     <div class="hist-list">${hist}</div>
-  </div>
-  <div id="modalHost"></div>`;
+  </div>`;
 }
 
 async function openUserModal(uidNum){
@@ -1150,39 +1174,54 @@ async function saveUser(uidNum){
   const password = document.getElementById('ufPass').value;
   const role = document.getElementById('ufRole').value;
   if(!name || !username || !password){ toast('Completa los campos'); return; }
-  const db = await loadDB();
+  const db = await loadDB(true);
   if(db.users.some(x=>x.username.toLowerCase()===username.toLowerCase() && x.id!==uidNum)){
     toast('El usuario ya existe'); return;
   }
   if(uidNum){
     const u = db.users.find(x=>x.id===uidNum);
     Object.assign(u, {name, username, password, role});
-    logHistory('Usuario editado', name);
+    logHistory(db, 'Usuario editado', name);
   }else{
     const id = nextId(db,'user');
     db.users.push({id, name, username, password, role});
-    logHistory('Usuario creado', name);
+    logHistory(db, 'Usuario creado', name);
   }
-  saveDB(db);
   closeModalHost();
   toast('Guardado');
   renderView();
 }
 
 async function deleteUser(uidNum){
-  const db = await loadDB();
+  const db = await loadDB(true);
   const u = db.users.find(x=>x.id===uidNum);
   if(!confirm('¿Eliminar a '+(u?u.name:'')+'?')) return;
   db.users = db.users.filter(x=>x.id!==uidNum);
-  saveDB(db);
-  logHistory('Usuario eliminado', u?u.name:'');
+  logHistory(db, 'Usuario eliminado', u?u.name:'');
   toast('Eliminado');
   renderView();
 }
 
 /* =========================================================================
-   BOOT
+   BOOT Y AUTO-REFRESH CONCURRENTE
    ========================================================================= */
+
+// Actualizar las vistas automáticamente para ver las acciones de otros usuarios
+setInterval(async () => {
+  if (getSession()) {
+    const oldStr = JSON.stringify(dbCache);
+    await loadDB(true);
+    const newStr = JSON.stringify(dbCache);
+    if (oldStr !== newStr) {
+      // Evitar interrumpir si el usuario está escribiendo en algún campo
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
+        renderView();
+      }
+    }
+  }
+}, 8000);
+
 async function boot(){
   const s = getSession();
   if(!s){ renderLogin(); return; }
