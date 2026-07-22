@@ -120,13 +120,12 @@ a{color:inherit;}
 /* ---------- Badges ---------- */
 .badge{display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:700; padding:4px 9px; border-radius:99px; text-transform:uppercase; letter-spacing:.02em; white-space:nowrap;}
 .badge::before{content:''; width:6px; height:6px; border-radius:50%; background:currentColor;}
-.badge-espera{background:#fbe4d8; color:#9a3d16;}
-.badge-proceso{background:#fbeecb; color:#8a6408;}
+.badge-pendiente{background:#fbe0de; color:#a4241b;}
+.badge-en_proceso{background:#fbeecb; color:#8a6408;}
 .badge-listo{background:#e2f0da; color:#3a6b2b;}
 .badge-barra{background:#dcebf5; color:#1f5a80;}
 .badge-entregado{background:#e2f0da; color:#2d5422;}
 .badge-pagado{background:#e2f0da; color:#3a6b2b;}
-.badge-pendiente{background:#fbe0de; color:#a4241b;}
 .badge-admin{background:#f0dcf7;color:#7a2b91;}
 .badge-mesero{background:#dcebf5;color:#1f5a80;}
 .badge-cocinero{background:#fbeecb;color:#8a6408;}
@@ -261,7 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzi3ClhMFNWbBFYVFU3smi6uTQXIPaGzltEkRPwQd-xffFYlFtLdXB2uLterbcpn9pj/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx5ualOewckGUOmid86sVtRV-Ri-qIeR0figZJCCCJYa_cP9mlxAwYMfEHv1PAJb0BU/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -319,7 +318,6 @@ async function loadDB(force = false){
 
 function saveDB(db){
   dbCache = db;
-  // Petición POST asíncrona en segundo plano para evitar bloqueos
   fetch(SCRIPT_URL, {
     method: 'POST',
     body: JSON.stringify({action: 'saveDB', db: db}),
@@ -499,7 +497,7 @@ async function viewPedidos(){
   const s = getSession();
   const cats = ['Todos', ...new Set(db.products.map(p=>p.category))];
   const chips = cats.map(c=>`<button class="chip ${state.prodFilter===c?'active':''}" onclick="setProdFilter('${c}')">${c}</button>`).join('');
-  const prods = db.products.filter(p=> state.prodFilter==='Todos' || p.category===state.prodFilter);
+  const prods = [...db.products].sort((a,b) => a.id - b.id).filter(p=> state.prodFilter==='Todos' || p.category===state.prodFilter);
   const tiles = prods.map(p=>`
     <button class="prod-tile" onclick="addToCart(${p.id})" title="${p.description || ''}">
       <span class="pname">${p.name}</span>
@@ -594,7 +592,7 @@ function renderCart(){
 async function submitOrder(){
   if(!state.customer.trim()){ toast('Debes ingresar la información del cliente o mesa'); return; }
   if(state.cart.length===0){ toast('Agrega al menos un producto'); return; }
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   const s = getSession();
   const total = state.cart.reduce((a,i)=>a+i.price*i.qty,0);
   const order = {
@@ -604,7 +602,7 @@ async function submitOrder(){
     items: state.cart.map(i=>({...i})),
     generalNotes: state.generalNotes.trim(),
     waiterId: s.id, waiterName: s.name,
-    status:'espera', paymentStatus:'pendiente',
+    status:'pendiente', paymentStatus:'pendiente',
     payments:[], total,
     createdAt: new Date().toISOString(),
     paidAt:null, paidBy:null
@@ -619,8 +617,8 @@ async function submitOrder(){
 /* =========================================================================
    VIEW: COCINA
    ========================================================================= */
-const KITCHEN_STEPS = ['espera','proceso','listo','barra','entregado'];
-const KITCHEN_LABEL = {espera:'En espera', proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado'};
+const KITCHEN_STEPS = ['pendiente','en_proceso','listo','barra','entregado'];
+const KITCHEN_LABEL = {pendiente:'Pendiente', en_proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado'};
 async function viewCocina(){
   const db = await loadDB();
   let orders = [...db.orders];
@@ -636,6 +634,18 @@ async function viewCocina(){
     }).join('');
     const items = o.items.map(i=>`<li><span>${i.qty}x ${i.name}${i.notes?` <em class="muted">(${i.notes})</em>`:''}</span><b>${money(i.price*i.qty)}</b></li>`).join('');
     const nextStep = KITCHEN_STEPS[stepIdx+1];
+    
+    let btnHTML;
+    if(nextStep) {
+      let btnLabel = `Pasar a: ${KITCHEN_LABEL[nextStep]} →`;
+      if (o.status === 'pendiente') {
+          btnLabel = 'Preparar';
+      }
+      btnHTML = `<button class="btn btn-sm btn-success btn-block" onclick="setOrderStatus(${o.id}, '${nextStep}')">${btnLabel}</button>`;
+    } else {
+      btnHTML = `<span class="muted" style="font-size:12.5px;">✔ Entregado</span>`;
+    }
+
     return `
     <div class="ticket-card">
       <div class="ticket-head">
@@ -652,8 +662,8 @@ async function viewCocina(){
         ${o.generalNotes?`<div class="ticket-note">📝 ${o.generalNotes}</div>`:''}
       </div>
       <div class="ticket-foot">
-        ${o.status!=='espera'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
-        ${nextStep?`<button class="btn btn-sm btn-success btn-block" onclick="setOrderStatus(${o.id}, '${nextStep}')">Pasar a: ${KITCHEN_LABEL[nextStep]} →</button>`:`<span class="muted" style="font-size:12.5px;">✔ Entregado</span>`}
+        ${o.status!=='pendiente'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
+        ${btnHTML}
       </div>
     </div>`;
   }).join('') || `<div class="empty-state"><span class="ic">🍲</span>No hay pedidos por preparar.</div>`;
@@ -670,7 +680,7 @@ async function viewCocina(){
 }
 function setCocinaFilter(f){ state.cocinaFilter=f; renderView(); }
 async function setOrderStatus(id, status){
-  const db = await loadDB(); // Optimizado: usa caché instantánea para respuesta inmediata
+  const db = await loadDB();
   const o = db.orders.find(x=>x.id===id);
   if(!o) return;
   o.status = status;
@@ -768,10 +778,10 @@ async function renderPayModal(){
       ${splitsHTML}
       <button class="btn btn-sm" onclick="addSplit()">+ Dividir pago</button>
       <div class="total-row" style="margin-top:16px;">
-        <span>${remaining===0?'Cuenta saldada':(remaining>0?'Falta por cobrar':'Cambio')}</span>
-        <span style="color:${remaining===0?'var(--cilantro)':'var(--brick)'}">${money(Math.abs(remaining))}</span>
+        <span>${remaining === 0 ? 'Cuenta saldada' : (remaining > 0 ? 'Falta por cobrar' : 'Cambio')}</span>
+        <span style="color:${remaining <= 0 ? 'var(--cilantro)':'var(--brick)'}">${money(Math.abs(remaining))}</span>
       </div>
-      <button class="btn btn-primary btn-block" style="margin-top:14px;" ${remaining!==0?'disabled':''} onclick="confirmPayment()">Confirmar cobro</button>
+      <button class="btn btn-primary btn-block" style="margin-top:14px;" ${remaining > 0 ? 'disabled' : ''} onclick="confirmPayment()">Confirmar cobro</button>
     </div>
   </div>`;
 }
@@ -782,7 +792,7 @@ function updateSplitAmount(i,v){ state.payDraft.splits[i].amount = parseFloat(v)
 function closePayModal(){ state.payDraft=null; document.getElementById('modalHost').innerHTML=''; }
 
 async function confirmPayment(){
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   const d = state.payDraft;
   const o = db.orders.find(x=>x.id===d.orderId);
   
@@ -863,7 +873,7 @@ async function printTicket(orderId){
    ========================================================================= */
 async function viewProductos(){
   const db = await loadDB();
-  const rows = db.products.map(p=>`
+  const rows = [...db.products].sort((a, b) => a.id - b.id).map(p=>`
     <tr>
       <td><b>${p.name}</b><br><span class="muted" style="font-size:12px;">${p.description || 'Sin descripción'}</span></td>
       <td>${p.category}</td>
@@ -907,7 +917,7 @@ async function saveProduct(pid){
   const price = parseFloat(document.getElementById('pfPrice').value)||0;
   const description = document.getElementById('pfDesc').value.trim();
   if(!name){ toast('Escribe un nombre'); return; }
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   if(pid){
     const p = db.products.find(x=>x.id===pid);
     Object.assign(p, {name, category:cat, price, description});
@@ -923,7 +933,7 @@ async function saveProduct(pid){
 }
 
 async function deleteProduct(pid){
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   const p = db.products.find(x=>x.id===pid);
   if(!confirm('¿Eliminar "'+(p?p.name:'')+'"?')) return;
   db.products = db.products.filter(x=>x.id!==pid);
@@ -955,7 +965,7 @@ async function viewCorte(){
   const cashOpen = db.cash.date===tk;
   const finalCash = (cashOpen? (Number(db.cash.initial)||0) : 0) + dayS.byMethod.efectivo;
 
-  const closuresRows = [...db.closures].reverse().slice(0,10).map(c=> {
+  const closuresRows = [...db.closures].sort((a,b) => new Date(b.ts) - new Date(a.ts)).slice(0,10).map(c=> {
     const diff = c.difference !== undefined ? c.difference : 0;
     const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
@@ -1026,7 +1036,7 @@ async function viewCorte(){
 
 async function abrirCaja(){
   const val = parseFloat(document.getElementById('initCash').value)||0;
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   db.cash = {date:todayKey(), initial:val, openedBy:getSession().name};
   logHistory(db, 'Apertura de caja', 'Inicial: '+money(val));
   toast('Caja abierta');
@@ -1034,7 +1044,7 @@ async function abrirCaja(){
 }
 
 async function realizarCorte(){
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   const expectedCash = (Number(db.cash.initial)||0) + dayS.byMethod.efectivo;
@@ -1061,7 +1071,7 @@ async function realizarCorte(){
 
 async function reiniciarVentasSemana(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas de la semana actual?')) return;
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   db.counters.weekSales = 0;
   logHistory(db, 'Reinicio de semana', 'Se reiniciaron las ventas de la semana actual');
   toast('Ventas de la semana reiniciadas');
@@ -1070,7 +1080,7 @@ async function reiniciarVentasSemana(){
 
 async function reiniciarVentasMes(){
   if(!confirm('¿Estás seguro de reiniciar únicamente las ventas del mes actual?')) return;
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   db.counters.monthSales = 0;
   logHistory(db, 'Reinicio de mes', 'Se reiniciaron las ventas del mes actual');
   toast('Ventas del mes reiniciadas');
@@ -1079,7 +1089,7 @@ async function reiniciarVentasMes(){
 
 async function printReport(){
   const db = await loadDB();
-  const rows = [...db.closures].reverse().map(c=>{
+  const rows = [...db.closures].sort((a,b) => new Date(b.ts) - new Date(a.ts)).map(c=>{
     const diff = c.difference !== undefined ? c.difference : 0;
     const efectivo = c.byMethod && c.byMethod.efectivo ? c.byMethod.efectivo : 0;
     const tarjeta = c.byMethod && c.byMethod.tarjeta ? c.byMethod.tarjeta : 0;
@@ -1103,7 +1113,7 @@ function selectUserHistory(name){
 
 async function viewUsuarios(){
   const db = await loadDB();
-  const rows = db.users.map(u=>`
+  const rows = [...db.users].sort((a, b) => a.id - b.id).map(u=>`
     <tr>
       <td>${u.name}</td>
       <td>${u.username}</td>
@@ -1165,7 +1175,7 @@ async function saveUser(uidNum){
   const password = document.getElementById('ufPass').value;
   const role = document.getElementById('ufRole').value;
   if(!name || !username || !password){ toast('Completa los campos'); return; }
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   if(db.users.some(x=>x.username.toLowerCase()===username.toLowerCase() && x.id!==uidNum)){
     toast('El usuario ya existe'); return;
   }
@@ -1184,7 +1194,7 @@ async function saveUser(uidNum){
 }
 
 async function deleteUser(uidNum){
-  const db = await loadDB(); // Optimizado: usa caché instantánea
+  const db = await loadDB();
   const u = db.users.find(x=>x.id===uidNum);
   if(!confirm('¿Eliminar a '+(u?u.name:'')+'?')) return;
   db.users = db.users.filter(x=>x.id!==uidNum);
@@ -1197,7 +1207,6 @@ async function deleteUser(uidNum){
    BOOT Y AUTO-REFRESH CONCURRENTE
    ========================================================================= */
 
-// Actualizar las vistas automáticamente para ver las acciones de otros usuarios en segundo plano
 setInterval(async () => {
   if (getSession()) {
     const oldStr = JSON.stringify(dbCache);
