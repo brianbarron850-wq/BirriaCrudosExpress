@@ -310,7 +310,7 @@ async function loadDB(force = false){
     dbCache = data;
     return dbCache;
   }catch(e){
-    console.error("Error conectando a Sheets:", e);
+    console.error("Error conectando a base de datos:", e);
     if(!dbCache) {
       toast("Error de conexión. Se cargará base temporal (revisa backend).");
       return seedDB();
@@ -494,7 +494,7 @@ async function manualRefresh(){
   dbCache = null;
   await loadDB(true);
   await renderView();
-  toast('Sincronizado con Google Sheets');
+  toast('Sincronizado con base de datos');
 }
 
 async function renderView(){
