@@ -260,9 +260,10 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxLeq_4BMNS255IFPjY_3nQ0SeQJzE7lvxEpJC4WmCgnHsVE-nHujZD1zbnVfk5GfM/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyyibm3hoY5PDbfY0Yc2TdgXsPgCF_bhJwHHvXwU99DSqhDK2_2ByxCoU2UbkzoH_1c/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
+let isSaving = false;
 
 function todayKey(d=new Date()){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -304,13 +305,12 @@ async function loadDB(force = false){
   if(dbCache && !force) return dbCache;
   try{
     const res = await fetch(SCRIPT_URL + "?action=getDB");
-    if (!res.ok) throw new Error('Network response was not ok');
     dbCache = await res.json();
     return dbCache;
   }catch(e){
-    console.error("Error cargando la base de datos:", e);
+    console.error(e);
     if(!dbCache) {
-      toast("Error conectando a Google Sheets. Cargando base temporal.");
+      toast("Error conectando a Google Sheets");
       return seedDB();
     }
     return dbCache;
@@ -319,11 +319,18 @@ async function loadDB(force = false){
 
 function saveDB(db){
   dbCache = db;
+  isSaving = true;
   fetch(SCRIPT_URL, {
     method: 'POST',
+    mode: 'no-cors',
     body: JSON.stringify({action: 'saveDB', db: db}),
     headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-  }).catch(e => console.error("Error sincronizando en segundo plano:", e));
+  }).then(() => {
+    setTimeout(() => { isSaving = false; }, 2500);
+  }).catch(e => {
+    console.error("Error sincronizando en segundo plano:", e);
+    setTimeout(() => { isSaving = false; }, 2500);
+  });
 }
 
 function nextId(db, key){ const n = db.counters[key]||1; db.counters[key]=n+1; return n; }
@@ -1208,9 +1215,8 @@ async function deleteUser(uidNum){
    BOOT Y AUTO-REFRESH CONCURRENTE
    ========================================================================= */
 
-// Optimización: Incrementar el intervalo a 15 segundos para evitar saturar la API (Google's "Too Many Requests")
 setInterval(async () => {
-  if (getSession()) {
+  if (getSession() && !isSaving) {
     const oldStr = JSON.stringify(dbCache);
     await loadDB(true);
     const newStr = JSON.stringify(dbCache);
@@ -1221,7 +1227,7 @@ setInterval(async () => {
       }
     }
   }
-}, 15000); 
+}, 8000);
 
 async function boot(){
   const s = getSession();
