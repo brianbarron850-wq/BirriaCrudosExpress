@@ -1417,7 +1417,7 @@ async function boot(){
   const s = getSession();
   if(!s){ renderLogin(); return; }
   
-  document.getElementById('root').innerHTML = `<div class="loading-overlay"><div style="font-size:36px;">🌶️</div>Conectando a Google Sheets...</div>`;
+  document.getElementById('root').innerHTML = `<div class="loading-overlay"><div style="font-size:36px;">🌶️</div>Conectando...</div>`;
   await loadDB(true);
   renderShell();
 }
