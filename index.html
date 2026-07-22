@@ -260,7 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxKsTFuV64t80bEOo0ih15r4dsQC063MxwRnUc7SGcg0TR3ey9mqO6PMb7GgZDXyOjA/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxLeq_4BMNS255IFPjY_3nQ0SeQJzE7lvxEpJC4WmCgnHsVE-nHujZD1zbnVfk5GfM/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -304,12 +304,13 @@ async function loadDB(force = false){
   if(dbCache && !force) return dbCache;
   try{
     const res = await fetch(SCRIPT_URL + "?action=getDB");
+    if (!res.ok) throw new Error('Network response was not ok');
     dbCache = await res.json();
     return dbCache;
   }catch(e){
-    console.error(e);
+    console.error("Error cargando la base de datos:", e);
     if(!dbCache) {
-      toast("Error conectando a Google Sheets");
+      toast("Error conectando a Google Sheets. Cargando base temporal.");
       return seedDB();
     }
     return dbCache;
@@ -1207,6 +1208,7 @@ async function deleteUser(uidNum){
    BOOT Y AUTO-REFRESH CONCURRENTE
    ========================================================================= */
 
+// Optimización: Incrementar el intervalo a 15 segundos para evitar saturar la API (Google's "Too Many Requests")
 setInterval(async () => {
   if (getSession()) {
     const oldStr = JSON.stringify(dbCache);
@@ -1219,7 +1221,7 @@ setInterval(async () => {
       }
     }
   }
-}, 8000);
+}, 15000); 
 
 async function boot(){
   const s = getSession();
