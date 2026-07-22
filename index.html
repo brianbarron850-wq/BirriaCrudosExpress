@@ -160,7 +160,7 @@ a{color:inherit;}
 /* ---------- Kitchen tickets ---------- */
 .ticket-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:16px;}
 .ticket-card{background:var(--paper); border:1.5px solid var(--line); border-radius:12px; position:relative; overflow:hidden; box-shadow:var(--shadow);}
-.ticket-card::before{content:'absolute'; position:absolute; top:0; left:0; right:0; height:8px;
+.ticket-card::before{content:''; position:absolute; top:0; left:0; right:0; height:8px;
   background-image: radial-gradient(circle, var(--bg) 4px, transparent 4.5px);
   background-size: 16px 16px; background-position:0 -4px;}
 .ticket-head{padding:16px 16px 10px; border-bottom:1px dashed var(--line);}
@@ -258,10 +258,10 @@ table tr:last-child td{border-bottom:none;}
 <script>
 /* =========================================================================
    BIRRIA EXPRESS · Sistema de gestión de restaurante
-   Base de datos: Google Sheets vía Apps Script Web App (Alojado en GitHub)
+   Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby4hFzn8qUNjsq4cIA8qv5pIUlWThbdTEsQAGlMC4IJJEIxdY0HQYZefdjUKJuT2hyc/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwuwDlW1KbBQ34ucsN24BRXdP1iBfDU3zeUdVcwwRr4zQ1XeTCYHgYsifOrE7NB9SBz/exec"; // <-- PEGA TU URL DE APPS SCRIPT AQUÍ
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 
@@ -319,13 +319,11 @@ async function loadDB(force = false){
 
 function saveDB(db){
   dbCache = db;
-  // Se cambia a POST para evitar errores cuando la base de datos es muy pesada y superar el límite de URLs, permitiendo el guardado y sincronización impecable
+  // Se cambia a petición POST para evitar el límite de caracteres en la URL y corregir errores de guardado y sincronización
   fetch(SCRIPT_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
-    },
-    body: JSON.stringify({action: 'saveDB', db: db})
+    body: JSON.stringify({action: 'saveDB', db: db}),
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' } // text/plain evita preflight options en Apps Script
   }).catch(e => console.error("Error sincronizando en segundo plano:", e));
 }
 
@@ -951,15 +949,8 @@ async function viewCorte(){
   const tk = todayKey();
   const dayS = computeSales(db, d=>todayKey(d)===tk);
   
-  let weekTotal = db.counters.weekSales;
-  if (weekTotal === undefined) {
-    weekTotal = 0;
-  }
-  
-  let monthTotal = db.counters.monthSales;
-  if (monthTotal === undefined) {
-    monthTotal = 0;
-  }
+  let weekTotal = db.counters.weekSales !== undefined ? db.counters.weekSales : 0;
+  let monthTotal = db.counters.monthSales !== undefined ? db.counters.monthSales : 0;
   
   const cashOpen = db.cash.date===tk;
   const finalCash = (cashOpen? (Number(db.cash.initial)||0) : 0) + dayS.byMethod.efectivo;
@@ -1027,7 +1018,7 @@ async function viewCorte(){
   <div class="card">
     <div class="section-title">Historial de cortes</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Total</th><th>Cerró</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Inicial</th><th>Caja Final (Esp/Real)</th><th>Sobrante/Faltante</th><th>Efectivo</th><th>Tarjeta</th><th>Transf.</th><th>Total</th><th>Cerró</th></tr></thead>
       <tbody>${closuresRows}</tbody>
     </table></div>
   </div>`;
@@ -1097,7 +1088,7 @@ async function printReport(){
   }).join('') || '<tr><td colspan="10">Sin cortes</td></tr>';
   const w = window.open('', '_blank');
   w.document.write(`<html><head><title>Reporte</title><style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} td,th{border:1px solid #ccc;padding:6px;}</style></head>
-  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Efectivo</th><th>Tarjeta</th><th>Transferencia</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
+  <body><h1>Birria Express — Histórico</h1><table><thead><tr><th>Fecha</th><th>Inicial</th><th>Final Real</th><th>Sobr/Falt</th><th>Efectivo</th><th>Tarjeta</th><th>Transf</th><th>Total</th><th>Pedidos</th><th>Cerró</th></tr></thead><tbody>${rows}</tbody></table>
   <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
