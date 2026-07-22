@@ -411,8 +411,6 @@ function renderLogin(){
         <div class="login-error" id="loginError"></div>
         <button class="btn btn-primary btn-block" type="submit">Entrar</button>
       </form>
-      <div class="login-hint">Usuario por defecto: <b>Brian</b> / <b>1234</b></div>
-    </div>
   </div>`;
   document.getElementById('loginForm').addEventListener('submit', async e=>{
     e.preventDefault();
@@ -451,7 +449,7 @@ async function renderShell(){
   document.getElementById('root').innerHTML = `
   <div class="app-shell">
     <div class="sidebar">
-      <div class="brand"><div class="logo">🌶️</div><div><strong>Birria Express</strong><span>Nube Sheets</span></div></div>
+      <div class="brand"><div class="logo">🌶️</div><div><strong>Birria Express</strong><span></span></div></div>
       ${navItems}
       <div class="sidebar-foot">
         <button class="navbtn" onclick="manualRefresh()"><span class="ic">🔄</span> Sincronizar</button>
