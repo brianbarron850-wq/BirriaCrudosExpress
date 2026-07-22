@@ -260,8 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-// IMPORTANTE: Asegúrate de actualizar esta URL con la tuya (asegúrate de que en "Acceso" diga "Cualquier persona")
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxYIwqaCvywQM_npSvf00xzSZndvnvXedf4ZgvaKWxGZ1fWGkkgc7_zEzRTMu0EwTaW/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxeCkWQ5taMg4lap3ddeM1r4oKw83hOCS0ZentP-9e9Ql8SWG_U64WUWIkBTx6H6m6y/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 let isSaving = false;
@@ -306,12 +305,14 @@ async function loadDB(force = false){
   if(dbCache && !force) return dbCache;
   try{
     const res = await fetch(SCRIPT_URL + "?action=getDB");
-    dbCache = await res.json();
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    dbCache = data;
     return dbCache;
   }catch(e){
-    console.error(e);
+    console.error("Error conectando a Sheets:", e);
     if(!dbCache) {
-      toast("Error conectando a Google Sheets");
+      toast("Error de conexión. Se cargará base temporal (revisa backend).");
       return seedDB();
     }
     return dbCache;
@@ -321,15 +322,23 @@ async function loadDB(force = false){
 function saveDB(db){
   dbCache = db;
   isSaving = true;
+  // Se quitó mode: 'no-cors' para poder leer los errores del backend correctamente.
   fetch(SCRIPT_URL, {
     method: 'POST',
-    mode: 'no-cors',
     body: JSON.stringify({action: 'saveDB', db: db}),
     headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-  }).then(() => {
-    setTimeout(() => { isSaving = false; }, 2500);
-  }).catch(e => {
-    console.error("Error sincronizando en segundo plano:", e);
+  })
+  .then(res => res.json())
+  .then(data => {
+    if(data && !data.success) {
+      console.error("Error devuelto por Apps Script:", data.error);
+      toast("Fallo al guardar: " + data.error);
+    }
+  })
+  .catch(e => {
+    console.error("Error de conexión al sincronizar:", e);
+  })
+  .finally(() => {
     setTimeout(() => { isSaving = false; }, 2500);
   });
 }
