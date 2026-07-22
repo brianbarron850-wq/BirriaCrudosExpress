@@ -260,7 +260,7 @@ table tr:last-child td{border-bottom:none;}
    Base de datos: Google Sheets vía Apps Script Web App
    ========================================================================= */
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxcC7atJN-zDuolm4xXac7O60U2tBJJMEK_pBP7qmrAL8eZZv_yCCDbRi28RLncqkPI/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyFyenX2L08Z4IcIvfGQDMsJwhidjwtJS3G5KemJOCOCMU_OQP89CtA6_o6TJL-idVm/exec";
 const SESSION_KEY = 'birriaSession_v1';
 let dbCache = null;
 let isSaving = false;
@@ -383,10 +383,12 @@ let state = {
   customer:'',
   generalNotes:'',
   prodFilter:'Todos',
+  productSearchTerm:'',
   cocinaFilter:'activos',
   cajaFilter:'pendientes',
   payDraft:null,
-  selectedHistoryUser:null
+  selectedHistoryUser:null,
+  editingOrderId: null
 };
 
 /* =========================================================================
@@ -474,7 +476,14 @@ async function renderShell(){
   await renderView();
 }
 
-function goView(v){ state.view = v; state.cart=[]; state.customer=''; state.generalNotes=''; renderShell(); }
+function goView(v){ 
+  state.view = v; 
+  state.cart=[]; 
+  state.customer=''; 
+  state.generalNotes=''; 
+  state.editingOrderId=null;
+  renderShell(); 
+}
 async function doLogout(){ 
   const db = await loadDB();
   logHistory(db, 'Cierre de sesión', (getSession()||{}).name+' cerró sesión'); 
@@ -505,19 +514,73 @@ function afterRenderHooks(){
 }
 
 /* =========================================================================
-   CANCELACIÓN DE PEDIDOS
+   ASIGNACIÓN Y CANCELACIÓN DE PEDIDOS
    ========================================================================= */
-async function cancelOrder(orderId){
+async function openAssignModal(orderId) {
   const db = await loadDB();
-  const o = db.orders.find(x=>x.id===orderId);
-  if(!o) return;
+  const o = db.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const waiters = db.users.filter(u => u.role === 'mesero' || u.role === 'admin');
+  const options = waiters.map(w => `<option value="${w.id}" ${w.id === o.waiterId ? 'selected' : ''}>${w.name}</option>`).join('');
   
-  const reason = prompt(`Ingrese el motivo de cancelación para el pedido ${o.folio}:`);
+  document.getElementById('modalHost').innerHTML = `
+  <div class="modal-overlay" onclick="if(event.target===this) closeModalHost()">
+    <div class="modal">
+      <button class="modal-close" onclick="closeModalHost()">✕</button>
+      <h2>Reasignar Pedido ${o.folio}</h2>
+      <div class="field">
+        <label>Seleccionar Mesero</label>
+        <select id="assignWaiterSelect">
+          ${options}
+        </select>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="confirmAssignWaiter(${o.id})">Guardar Asignación</button>
+    </div>
+  </div>`;
+}
+
+async function confirmAssignWaiter(orderId) {
+  const select = document.getElementById('assignWaiterSelect');
+  const newWaiterId = Number(select.value);
+  const newWaiterName = select.options[select.selectedIndex].text;
+  
+  closeModalHost();
+  toast('Reasignando...');
+  
+  const db = await loadDB(true); 
+  const o = db.orders.find(x => x.id === orderId);
+  if(o) {
+      o.waiterId = newWaiterId;
+      o.waiterName = newWaiterName;
+      logHistory(db, 'Reasignación de pedido', `Pedido ${o.folio} reasignado a ${newWaiterName}`);
+      toast('Pedido reasignado');
+  }
+  renderView();
+}
+
+async function cancelOrder(orderId){
+  const dbCheck = await loadDB(); 
+  const oCheck = dbCheck.orders.find(x=>x.id===orderId);
+  if(!oCheck) return;
+  
+  const reason = prompt(`Ingrese el motivo de cancelación para el pedido ${oCheck.folio}:`);
   if(reason === null) return;
   if(!reason.trim()){
     toast('El motivo de cancelación es obligatorio');
     return;
   }
+  
+  const local = dbCache.orders.find(x=>x.id===orderId);
+  if(local) {
+     local.status = 'cancelado';
+     local.paymentStatus = 'cancelado';
+  }
+  renderView();
+  toast('Cancelando pedido...');
+  
+  const db = await loadDB(true);
+  const o = db.orders.find(x=>x.id===orderId);
+  if(!o) return;
   
   const s = getSession();
   o.status = 'cancelado';
@@ -528,8 +591,53 @@ async function cancelOrder(orderId){
   
   logHistory(db, 'Pedido cancelado', `${o.folio} cancelado por ${o.canceledBy}. Motivo: ${o.cancelReason}`);
   toast(`Pedido ${o.folio} cancelado`);
-  saveDB(db);
   renderView();
+}
+
+async function editOrder(id){
+  const db = await loadDB();
+  const o = db.orders.find(x=>x.id===id);
+  if(!o) return;
+  state.editingOrderId = o.id;
+  state.customer = o.customer;
+  state.generalNotes = o.generalNotes;
+  state.cart = o.items.map(i=>({...i}));
+  state.view = 'pedidos';
+  renderShell();
+}
+
+function cancelEdit(){
+  state.editingOrderId = null;
+  state.cart = [];
+  state.customer = '';
+  state.generalNotes = '';
+  renderView();
+}
+
+/* =========================================================================
+   IMPRESIÓN AUTOMÁTICA COCINA
+   ========================================================================= */
+async function printKitchenTicket(orderId) {
+  const db = await loadDB();
+  const o = db.orders.find(x => x.id === orderId);
+  if(!o) return;
+  const items = o.items.map(i => `<div style="font-size:16px; font-weight:bold;">${i.qty}x ${i.name}</div>${i.notes ? `<div style="font-size:14px; margin-bottom:6px; padding-left:10px;">* Nota: ${i.notes}</div>` : '<br>'}`).join('');
+  
+  const w = window.open('', '_blank', 'width=380,height=600');
+  w.document.write(`<html><head><title>Cocina ${o.folio}</title>
+  <style>body{font-family:monospace; padding:14px; font-size:14px; color:#000;} h2{text-align:center;margin:0 0 4px;} .c{text-align:center;} hr{border:none;border-top:2px dashed #000; margin:10px 0;}</style>
+  </head><body>
+  <h2>COCINA</h2>
+  <div class="c" style="font-size:20px; font-weight:bold;">${o.folio}</div>
+  <div class="c">${fmtDateTime(o.createdAt)}</div>
+  <hr>Cliente: <b>${o.customer}</b><br>Atendió: ${o.waiterName}<hr>
+  ${items}
+  ${o.generalNotes ? '<hr>NOTAS GENERALES:<br><b>' + o.generalNotes + '</b>' : ''}
+  <hr>
+  <div class="c" style="margin-top:10px;">--- FIN PEDIDO ---</div>
+  <script>window.onload=()=>{window.print(); window.onafterprint=()=>{window.close();}; setTimeout(()=>window.close(), 1000);}<\/script>
+  </body></html>`);
+  w.document.close();
 }
 
 /* =========================================================================
@@ -561,11 +669,24 @@ async function viewPedidos(){
       `).join('')}
     </div>` : '';
 
+  const myPendingOrders = db.orders.filter(o => o.waiterId === s.id && o.status !== 'entregado' && o.status !== 'cancelado' && o.status !== 'barra');
+  const pendingOrdersHTML = myPendingOrders.length ? `
+    <div class="card" style="margin-bottom:18px; border-color:var(--corn); background:#fcf9f2;">
+      <div class="section-title" style="color:#8a6408;">📝 Mis pedidos en curso</div>
+      ${myPendingOrders.map(o=>`
+        <div class="flex-between" style="padding:8px 0; border-bottom:1px dashed var(--line);">
+          <div><b>${o.folio}</b> · ${o.customer} <span class="badge badge-${o.status}">${KITCHEN_LABEL[o.status] || o.status}</span></div>
+          <button class="btn btn-sm btn-warn" onclick="editOrder(${o.id})">Editar</button>
+        </div>
+      `).join('')}
+    </div>` : '';
+
   return `
   <div class="view-head">
-    <div><h2>Levantar pedido</h2><p>Selecciona productos, indica cantidades y envía a cocina y caja.</p></div>
+    <div><h2>${state.editingOrderId ? 'Editar pedido' : 'Levantar pedido'}</h2><p>Selecciona productos, indica cantidades y envía a cocina y caja.</p></div>
   </div>
   ${barraAlertHTML}
+  ${pendingOrdersHTML}
   <div class="order-grid">
     <div class="card">
       <div class="section-title">Menú</div>
@@ -587,7 +708,8 @@ async function viewPedidos(){
         <label>Tomado por</label>
         <input type="text" value="${s.name} (${ROLE_LABEL[s.role]})" disabled style="background:var(--bg-alt); color:var(--ink-soft);">
       </div>
-      <button class="btn btn-primary btn-block" onclick="submitOrder()">Enviar a cocina y caja →</button>
+      <button class="btn btn-primary btn-block" onclick="submitOrder()">${state.editingOrderId ? 'Actualizar pedido ✓' : 'Enviar a cocina y caja →'}</button>
+      ${state.editingOrderId ? `<button class="btn btn-danger btn-block" onclick="cancelEdit()" style="margin-top:8px;">Cancelar edición</button>` : ''}
     </div>
   </div>`;
 }
@@ -635,27 +757,53 @@ function renderCart(){
 async function submitOrder(){
   if(!state.customer.trim()){ toast('Debes ingresar la información del cliente o mesa'); return; }
   if(state.cart.length===0){ toast('Agrega al menos un producto'); return; }
-  const db = await loadDB();
+  
+  const cartCopy = state.cart.map(i=>({...i}));
+  const customerCopy = state.customer.trim();
+  const notesCopy = state.generalNotes.trim();
+  const total = cartCopy.reduce((a,i)=>a+i.price*i.qty,0);
+  const isEdit = state.editingOrderId !== null;
+  const editId = state.editingOrderId;
+  
+  state.cart=[]; state.customer=''; state.generalNotes=''; state.editingOrderId = null;
+  toast('Procesando pedido...');
+  renderView();
+  
+  const db = await loadDB(true);
   const s = getSession();
-  const total = state.cart.reduce((a,i)=>a+i.price*i.qty,0);
-  const order = {
-    id: nextId(db,'order'),
-    folio: 'B-'+String(db.counters.order-1).padStart(4,'0'),
-    customer: state.customer.trim(),
-    items: state.cart.map(i=>({...i})),
-    generalNotes: state.generalNotes.trim(),
-    waiterId: s.id, waiterName: s.name,
-    status:'pendiente', paymentStatus:'pendiente',
-    payments:[], total, originalTotal: total,
-    createdAt: new Date().toISOString(),
-    paidAt:null, paidBy:null,
-    tip:0, discount:0, discountReason:'', change:0,
-    canceledBy:null, canceledAt:null, cancelReason:''
-  };
-  db.orders.unshift(order);
-  logHistory(db, 'Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
-  state.cart=[]; state.customer=''; state.generalNotes='';
-  toast('Pedido '+order.folio+' enviado');
+  
+  if (isEdit) {
+    const o = db.orders.find(x => x.id === editId);
+    if (o) {
+      o.customer = customerCopy;
+      o.items = cartCopy;
+      o.generalNotes = notesCopy;
+      o.total = total;
+      o.originalTotal = total;
+      logHistory(db, 'Pedido editado', `${o.folio} editado por ${s.name}`);
+      toast('Pedido ' + o.folio + ' actualizado');
+      printKitchenTicket(o.id);
+    }
+  } else {
+    const order = {
+      id: nextId(db,'order'),
+      folio: 'B-'+String(db.counters.order-1).padStart(4,'0'),
+      customer: customerCopy,
+      items: cartCopy,
+      generalNotes: notesCopy,
+      waiterId: s.id, waiterName: s.name,
+      status:'pendiente', paymentStatus:'pendiente',
+      payments:[], total, originalTotal: total,
+      createdAt: new Date().toISOString(),
+      paidAt:null, paidBy:null,
+      tip:0, discount:0, discountReason:'', change:0,
+      canceledBy:null, canceledAt:null, cancelReason:''
+    };
+    db.orders.unshift(order);
+    logHistory(db, 'Pedido creado', `${order.folio} · ${order.customer} · ${money(total)}`);
+    toast('Pedido '+order.folio+' enviado');
+    printKitchenTicket(order.id);
+  }
   renderView();
 }
 
@@ -666,6 +814,7 @@ const KITCHEN_STEPS = ['pendiente','en_proceso','listo','barra','entregado'];
 const KITCHEN_LABEL = {pendiente:'Pendiente', en_proceso:'En proceso', listo:'Listo', barra:'En barra', entregado:'Entregado', cancelado:'Cancelado'};
 async function viewCocina(){
   const db = await loadDB();
+  const s = getSession();
   let orders = [...db.orders];
   if(state.cocinaFilter==='activos') orders = orders.filter(o=>o.status!=='entregado' && o.status!=='cancelado');
   orders.sort((a,b)=> new Date(a.createdAt)-new Date(b.createdAt));
@@ -701,7 +850,7 @@ async function viewCocina(){
           <span class="folio">${o.folio}</span>
           <span class="badge ${isCanceled?'badge-pendiente':`badge-${o.status}`}">${KITCHEN_LABEL[o.status]}</span>
         </div>
-        <div class="meta">Mesero: ${o.waiterName} · ${fmtDateTime(o.createdAt)}</div>
+        <div class="meta">Mesero: ${o.waiterName} ${s.role==='admin'?`<a href="#" onclick="openAssignModal(${o.id}); return false;" style="color:var(--brick); text-decoration:underline; margin-left:4px;">(Reasignar)</a>`:''} · ${fmtDateTime(o.createdAt)}</div>
         <div class="meta">Cliente: ${o.customer}</div>
         ${isCanceled?`<div class="meta" style="color:var(--danger); margin-top:4px;"><b>Canceló:</b> ${o.canceledBy} (${fmtDateTime(o.canceledAt)})<br><b>Motivo:</b> ${o.cancelReason}</div>`:''}
       </div>
@@ -713,7 +862,10 @@ async function viewCocina(){
       <div class="ticket-foot">
         ${!isCanceled && o.status!=='pendiente'?`<button class="btn btn-sm btn-ghost" onclick="setOrderStatus(${o.id}, '${KITCHEN_STEPS[stepIdx-1]}')">← Regresar</button>`:''}
         ${btnHTML}
-        ${!isCanceled && o.status!=='entregado'?`<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">Cancelar</button>`:''}
+        ${!isCanceled && o.status!=='entregado'?`
+          <button class="btn btn-sm btn-warn" onclick="editOrder(${o.id})">Editar</button>
+          <button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">Cancelar</button>
+        `:''}
       </div>
     </div>`;
   }).join('') || `<div class="empty-state"><span class="ic">🍲</span>No hay pedidos por preparar.</div>`;
@@ -730,7 +882,12 @@ async function viewCocina(){
 }
 function setCocinaFilter(f){ state.cocinaFilter=f; renderView(); }
 async function setOrderStatus(id, status){
-  const db = await loadDB();
+  const local = dbCache.orders.find(x=>x.id===id);
+  if(local) local.status = status;
+  renderView();
+  toast('Procesando...');
+
+  const db = await loadDB(true);
   const o = db.orders.find(x=>x.id===id);
   if(!o) return;
   o.status = status;
@@ -743,6 +900,7 @@ async function setOrderStatus(id, status){
    ========================================================================= */
 async function viewCaja(){
   const db = await loadDB();
+  const s = getSession();
   let orders = [...db.orders];
   if(state.cajaFilter==='pendientes') orders = orders.filter(o=>o.paymentStatus==='pendiente' && o.status!=='cancelado');
   else if(state.cajaFilter==='cancelados') orders = orders.filter(o=>o.status==='cancelado');
@@ -757,7 +915,7 @@ async function viewCaja(){
     <div class="caja-row" ${isCanceled?'style="background:#fcf0f0; border-color:#e8baba;"':''}>
       <div class="cinfo">
         <div class="cname">${o.folio} · ${o.customer}</div>
-        <div class="csub">Mesero: ${o.waiterName} · <span class="badge badge-${isCanceled?'pendiente':o.status}">${isCanceled?'Cancelado':KITCHEN_LABEL[o.status]}</span> · ${fmtDateTime(o.createdAt)}</div>
+        <div class="csub">Mesero: ${o.waiterName} ${s.role==='admin'?`<a href="#" onclick="openAssignModal(${o.id}); return false;" style="color:var(--brick); text-decoration:underline; margin-left:4px;">(Reasignar)</a>`:''} · <span class="badge badge-${isCanceled?'pendiente':o.status}">${isCanceled?'Cancelado':KITCHEN_LABEL[o.status]}</span> · ${fmtDateTime(o.createdAt)}</div>
         ${isCanceled ? `<div class="csub" style="color:var(--danger); margin-top:4px;"><b>Cancelado por:</b> ${o.canceledBy} (${fmtDateTime(o.canceledAt)}) · <b>Motivo:</b> ${o.cancelReason||'Sin motivo'}</div>` : ''}
         ${o.discount > 0 ? `<div class="csub" style="color:var(--brick);"><b>Descuento:</b> -${money(o.discount)} (${o.discountReason||''})</div>` : ''}
         ${o.tip > 0 ? `<div class="csub" style="color:var(--cilantro-dark);"><b>Propina:</b> ${money(o.tip)}</div>` : ''}
@@ -767,6 +925,7 @@ async function viewCaja(){
         <span class="badge ${badgeClass}">${statusLabel}</span>
         <button class="btn btn-sm" onclick="openTicket(${o.id})">Ticket</button>
         ${!isCanceled && o.paymentStatus==='pendiente'?`
+          <button class="btn btn-sm btn-warn" onclick="editOrder(${o.id})">Editar</button>
           <button class="btn btn-sm btn-primary" onclick="openPayModal(${o.id})">Cobrar</button>
           <button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">Cancelar</button>
         `:''}
@@ -958,8 +1117,11 @@ function recalcPayModal(){
 function closePayModal(){ state.payDraft=null; document.getElementById('modalHost').innerHTML=''; }
 
 async function confirmPayment(){
-  const db = await loadDB();
   const d = state.payDraft;
+  closePayModal();
+  toast('Procesando cobro...');
+  
+  const db = await loadDB(true);
   const o = db.orders.find(x=>x.id===d.orderId);
   if(!o) return;
   
@@ -983,9 +1145,9 @@ async function confirmPayment(){
 
   logHistory(db, 'Cobro realizado', `${o.folio} · Total: ${money(o.total)}${o.discount>0?` (Desc: -${money(o.discount)})`:''}${o.tip>0?` (Propina: ${money(o.tip)})`:''}`);
   toast('Pago registrado');
-  closePayModal();
   renderView();
   openTicket(o.id);
+  printTicket(o.id); 
 }
 
 async function openTicket(orderId){
@@ -1049,7 +1211,7 @@ async function printTicket(orderId){
   <hr>${pays}
   ${changeAmt > 0 ? `<hr><div style="display:flex;justify-content:space-between;font-weight:bold;">CAMBIO<span>${money(changeAmt)}</span></div>`:''}
   <div class="c" style="margin-top:10px;">¡Gracias por su compra!</div>
-  <script>window.onload=()=>{window.print();}<\/script>
+  <script>window.onload=()=>{window.print(); window.onafterprint=()=>{window.close();}; setTimeout(()=>window.close(), 1000);}<\/script>
   </body></html>`);
   w.document.close();
 }
@@ -1059,7 +1221,15 @@ async function printTicket(orderId){
    ========================================================================= */
 async function viewProductos(){
   const db = await loadDB();
-  const rows = [...db.products].sort((a, b) => a.id - b.id).map(p=>`
+  const searchTerm = (state.productSearchTerm || '').toLowerCase();
+  
+  const filteredProducts = [...db.products].filter(p => {
+    return p.name.toLowerCase().includes(searchTerm) || 
+           p.category.toLowerCase().includes(searchTerm) || 
+           (p.description && p.description.toLowerCase().includes(searchTerm));
+  }).sort((a, b) => a.id - b.id);
+
+  const rows = filteredProducts.map(p=>`
     <tr>
       <td><b>${p.name}</b><br><span class="muted" style="font-size:12px;">${p.description || 'Sin descripción'}</span></td>
       <td>${p.category}</td>
@@ -1068,16 +1238,35 @@ async function viewProductos(){
         <button class="btn btn-sm" onclick="openProductModal(${p.id})">Editar</button>
         <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p.id})">Eliminar</button>
       </td>
-    </tr>`).join('') || `<tr><td colspan="4" class="empty-state">Sin productos.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="4" class="empty-state">No se encontraron productos.</td></tr>`;
+
   return `
   <div class="view-head">
     <div><h2>Productos</h2><p>Menú del restaurante y descripciones.</p></div>
     <button class="btn btn-primary" onclick="openProductModal()">+ Nuevo producto</button>
   </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div class="field" style="margin-bottom:0;">
+      <label>Buscar productos</label>
+      <input type="text" id="prodSearchInput" placeholder="Escribe para filtrar por nombre, categoría o descripción..." value="${state.productSearchTerm || ''}" oninput="state.productSearchTerm=this.value; renderViewWithoutFocusLoss()">
+    </div>
+  </div>
   <div class="card table-wrap">
     <table><thead><tr><th>Nombre y Descripción</th><th>Categoría</th><th>Precio</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
   </div>`;
+}
+
+function renderViewWithoutFocusLoss(){
+  const inputVal = state.productSearchTerm;
+  renderView().then(() => {
+    const input = document.getElementById('prodSearchInput');
+    if(input) {
+      input.value = inputVal;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
 }
 
 async function openProductModal(pid){
